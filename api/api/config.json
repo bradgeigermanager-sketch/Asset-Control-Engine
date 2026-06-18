@@ -1,0 +1,23 @@
+{
+  "version": "2026-06-17",
+  "fuzzyMatch": {
+    "compositeScoring": {
+      "weights": {
+        "serial": 0.45,
+        "assetTag": 0.15,
+        "mac": 0.20,
+        "hostname": 0.15,
+        "model": 0.05
+      },
+      "autoLinkScoreThreshold": 0.90,
+      "suggestScoreThreshold": 0.70
+    },
+    "mac": {
+      "maxNibbleDifferences": 1
+    }
+  },
+  "operationalLimits": {
+    "maxAutoLinksPerHour": 500,
+    "manualQueueSlaHours": 24
+  }
+}
