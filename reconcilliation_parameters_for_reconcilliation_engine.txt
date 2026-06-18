@@ -1,0 +1,382 @@
+### Summary
+Below are **production‑ready reconciliation parameters** you can drop into the reconciliation engine. They include **field thresholds**, **scoring weights**, **auto‑link policies by asset class**, **security controls**, and **operational limits**. I provide both **JSON** and **YAML** formats plus a short application and tuning procedure.
+
+---
+
+### Parameter file JSON
+```json
+{
+  "version": "2026-06-17",
+  "authority": {
+    "attributeAuthority": {
+      "serialNumber": "ITAM",
+      "assetTag": "ITAM",
+      "macAddresses": "NetworkInventory",
+      "hostname": "AD/MDM",
+      "cloudResourceId": "CloudInventory"
+    },
+    "autoLinkPolicy": {
+      "requireMfaForCreate": true,
+      "requireDualApprovalForRedeploy": true
+    }
+  },
+  "matchingPipeline": {
+    "stages": [
+      "exactMatch",
+      "compositeMatch",
+      "fuzzyMatch",
+      "secondarySignals",
+      "manualReview"
+    ]
+  },
+  "exactMatch": {
+    "keys": ["serialNumber", "assetTag", "cloudResourceId"],
+    "autoLink": true,
+    "confidence": 1.0
+  },
+  "compositeMatch": {
+    "rules": [
+      {
+        "name": "mac_plus_hostname",
+        "requiredAttributes": ["macAddresses", "hostname"],
+        "matchType": "exact_mac_and_hostname",
+        "autoLink": true,
+        "confidence": 0.98
+      },
+      {
+        "name": "mac_plus_model",
+        "requiredAttributes": ["macAddresses", "model"],
+        "matchType": "exact_mac_and_model",
+        "autoLink": true,
+        "confidence": 0.95
+      }
+    ]
+  },
+  "fuzzyMatch": {
+    "hostname": {
+      "algorithm": "jaro_winkler",
+      "thresholds": {
+        "short": 0.97,
+        "medium": 0.92,
+        "long": 0.88
+      },
+      "lengthBuckets": {
+        "short": 0,
+        "medium": 6,
+        "long": 12
+      }
+    },
+    "model": {
+      "algorithm": "jaro_winkler",
+      "threshold": 0.90
+    },
+    "mac": {
+      "algorithm": "hamming",
+      "maxNibbleDifferences": 1,
+      "treatAsFuzzy": true
+    },
+    "compositeScoring": {
+      "weights": {
+        "serial": 0.45,
+        "assetTag": 0.15,
+        "mac": 0.20,
+        "hostname": 0.15,
+        "model": 0.05
+      },
+      "autoLinkScoreThreshold": 0.90,
+      "suggestScoreThreshold": 0.70,
+      "conflictScoreRange": {
+        "min": 0.40,
+        "max": 0.69
+      }
+    }
+  },
+  "secondarySignals": {
+    "phonetical": {
+      "enabled": true,
+      "fields": ["ownerName", "manufacturer"],
+      "weight": 0.02
+    },
+    "temporal": {
+      "lastSeenRecencyDaysWeighting": {
+        "0-7": 1.0,
+        "8-30": 0.8,
+        "31-90": 0.5,
+        "90+": 0.2
+      }
+    },
+    "sourceTrust": {
+      "agent": 1.0,
+      "mdm": 0.95,
+      "ad": 0.9,
+      "cloud": 0.9,
+      "network": 0.8,
+      "manual": 0.6
+    }
+  },
+  "assetClassPolicies": {
+    "laptop": {
+      "autoLinkAllowed": true,
+      "autoLinkMinScore": 0.92,
+      "suggestMinScore": 0.75,
+      "manualReviewRequiredIf": ["redeploy", "vendorChange"]
+    },
+    "server": {
+      "autoLinkAllowed": true,
+      "autoLinkMinScore": 0.95,
+      "suggestMinScore": 0.80,
+      "manualReviewRequiredIf": ["redeploy", "decommission"]
+    },
+    "switch": {
+      "autoLinkAllowed": false,
+      "suggestMinScore": 0.85
+    },
+    "iot": {
+      "autoLinkAllowed": false,
+      "suggestMinScore": 0.88,
+      "specialHandling": "OTTeamReview"
+    },
+    "vm": {
+      "autoLinkAllowed": true,
+      "autoLinkMinScore": 0.90,
+      "suggestMinScore": 0.70
+    }
+  },
+  "operationalLimits": {
+    "maxAutoLinksPerHour": 500,
+    "maxAutoCreatesPerDay": 50,
+    "manualQueueSlaHours": 24,
+    "conflictEscalationSlaHours": 8
+  },
+  "securityControls": {
+    "mfaRequiredFor": ["createAssetFromDiscovery", "approveRedeploy", "vendorMasterChange"],
+    "dualApprovalFor": ["redeployAsset", "vendorMasterChange"],
+    "audit": {
+      "appendOnly": true,
+      "anchorIntervalMinutes": 60,
+      "exportSignedReports": true
+    },
+    "evidenceRequirements": {
+      "redeploy": ["sanitizationCertificate", "custodyRecord", "approvalSignatures"],
+      "dispose": ["disposalCertificate", "photos", "custodyRecord"]
+    }
+  },
+  "monitoringAndMetrics": {
+    "metricsToEmit": ["coverage", "falsePositiveRate", "conflictRate", "manualResolutionTime"],
+    "alertThresholds": {
+      "coverageBelow": 0.95,
+      "falsePositiveAbove": 0.02,
+      "conflictRateAbove": 0.10
+    },
+    "reportingIntervalMinutes": 60
+  },
+  "rollbackAndRemediation": {
+    "autoLinkRollbackWindowHours": 72,
+    "rollbackProcedure": "create reversal audit entry, notify owners, reassign discovery to manual queue",
+    "manualCorrectionPolicy": "corrections must include actorId, reason, and evidence; require audit signature"
+  }
+}
+```
+
+---
+
+### Parameter file YAML
+```yaml
+version: "2026-06-17"
+authority:
+  attributeAuthority:
+    serialNumber: ITAM
+    assetTag: ITAM
+    macAddresses: NetworkInventory
+    hostname: AD/MDM
+    cloudResourceId: CloudInventory
+  autoLinkPolicy:
+    requireMfaForCreate: true
+    requireDualApprovalForRedeploy: true
+
+matchingPipeline:
+  stages:
+    - exactMatch
+    - compositeMatch
+    - fuzzyMatch
+    - secondarySignals
+    - manualReview
+
+exactMatch:
+  keys:
+    - serialNumber
+    - assetTag
+    - cloudResourceId
+  autoLink: true
+  confidence: 1.0
+
+compositeMatch:
+  rules:
+    - name: mac_plus_hostname
+      requiredAttributes:
+        - macAddresses
+        - hostname
+      matchType: exact_mac_and_hostname
+      autoLink: true
+      confidence: 0.98
+    - name: mac_plus_model
+      requiredAttributes:
+        - macAddresses
+        - model
+      matchType: exact_mac_and_model
+      autoLink: true
+      confidence: 0.95
+
+fuzzyMatch:
+  hostname:
+    algorithm: jaro_winkler
+    thresholds:
+      short: 0.97
+      medium: 0.92
+      long: 0.88
+    lengthBuckets:
+      short: 0
+      medium: 6
+      long: 12
+  model:
+    algorithm: jaro_winkler
+    threshold: 0.90
+  mac:
+    algorithm: hamming
+    maxNibbleDifferences: 1
+    treatAsFuzzy: true
+  compositeScoring:
+    weights:
+      serial: 0.45
+      assetTag: 0.15
+      mac: 0.20
+      hostname: 0.15
+      model: 0.05
+    autoLinkScoreThreshold: 0.90
+    suggestScoreThreshold: 0.70
+    conflictScoreRange:
+      min: 0.40
+      max: 0.69
+
+secondarySignals:
+  phonetical:
+    enabled: true
+    fields:
+      - ownerName
+      - manufacturer
+    weight: 0.02
+  temporal:
+    lastSeenRecencyDaysWeighting:
+      "0-7": 1.0
+      "8-30": 0.8
+      "31-90": 0.5
+      "90+": 0.2
+  sourceTrust:
+    agent: 1.0
+    mdm: 0.95
+    ad: 0.9
+    cloud: 0.9
+    network: 0.8
+    manual: 0.6
+
+assetClassPolicies:
+  laptop:
+    autoLinkAllowed: true
+    autoLinkMinScore: 0.92
+    suggestMinScore: 0.75
+    manualReviewRequiredIf:
+      - redeploy
+      - vendorChange
+  server:
+    autoLinkAllowed: true
+    autoLinkMinScore: 0.95
+    suggestMinScore: 0.80
+    manualReviewRequiredIf:
+      - redeploy
+      - decommission
+  switch:
+    autoLinkAllowed: false
+    suggestMinScore: 0.85
+  iot:
+    autoLinkAllowed: false
+    suggestMinScore: 0.88
+    specialHandling: OTTeamReview
+  vm:
+    autoLinkAllowed: true
+    autoLinkMinScore: 0.90
+    suggestMinScore: 0.70
+
+operationalLimits:
+  maxAutoLinksPerHour: 500
+  maxAutoCreatesPerDay: 50
+  manualQueueSlaHours: 24
+  conflictEscalationSlaHours: 8
+
+securityControls:
+  mfaRequiredFor:
+    - createAssetFromDiscovery
+    - approveRedeploy
+    - vendorMasterChange
+  dualApprovalFor:
+    - redeployAsset
+    - vendorMasterChange
+  audit:
+    appendOnly: true
+    anchorIntervalMinutes: 60
+    exportSignedReports: true
+  evidenceRequirements:
+    redeploy:
+      - sanitizationCertificate
+      - custodyRecord
+      - approvalSignatures
+    dispose:
+      - disposalCertificate
+      - photos
+      - custodyRecord
+
+monitoringAndMetrics:
+  metricsToEmit:
+    - coverage
+    - falsePositiveRate
+    - conflictRate
+    - manualResolutionTime
+  alertThresholds:
+    coverageBelow: 0.95
+    falsePositiveAbove: 0.02
+    conflictRateAbove: 0.10
+  reportingIntervalMinutes: 60
+
+rollbackAndRemediation:
+  autoLinkRollbackWindowHours: 72
+  rollbackProcedure: "create reversal audit entry, notify owners, reassign discovery to manual queue"
+  manualCorrectionPolicy: "corrections must include actorId, reason, and evidence; require audit signature"
+```
+
+---
+
+### How to apply these parameters
+- **Load file** into the reconciliation service configuration store (use the `version` field for safe rollbacks).  
+- **Start in suggest mode**: set `autoLink` to `false` globally for the first 48 hours while monitoring metrics.  
+- **Enable per‑class autoLink** gradually: enable `laptop` then `vm` then `server` after each 24–48 hour validation window.  
+- **Enforce security controls** before enabling auto‑create: require `mfaRequiredFor.createAssetFromDiscovery` and `dualApprovalFor.redeployAsset`.  
+- **Wire metrics** to your monitoring system and create alerts for `coverageBelow` and `falsePositiveAbove`.
+
+---
+
+### Tuning procedure
+1. **Baseline run**: run seeded dataset and collect metrics.  
+2. **Conservative start**: keep `autoLink` off; review suggested matches for 48 hours.  
+3. **Adjust thresholds**: if coverage < target, lower `fuzzyMatch.compositeScoring.autoLinkScoreThreshold` in 0.02 increments; re-run tests.  
+4. **Monitor FP**: if false positives rise, raise hostname/model thresholds or increase weight of `serial` and `mac`.  
+5. **Field tuning**: adjust `hostname.thresholds` by length bucket if many short‑name FPs occur.  
+6. **Operationalize rollback**: ensure `autoLinkRollbackWindowHours` and rollback procedure are tested.  
+7. **Weekly review**: review metrics, manual queue backlog, and adjust `operationalLimits` and SLA values.
+
+---
+
+### Acceptance metrics and monitoring
+- **Coverage target**: **≥ 0.95** (95%) of expected matches.  
+- **False positive ceiling**: **< 0.02** (2%).  
+- **Conflict rate alert**: > 10% triggers investigation.  
+- **Manual queue SLA**: average resolution time ≤ **24 hours**.  
+- **AutoLink rollback tested**: rollback procedure validated in staging.
