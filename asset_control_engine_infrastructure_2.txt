@@ -1,0 +1,285 @@
+### Components and deliverables (Core Infrastructure Phase: Components 1–6)
+
+Below are the first phase topics: the five core infrastructure components plus the immutable audit trail (Components **1–6**). For each component is listed the **purpose**, **concrete structures**, **implementation tasks**, **APIs/data model snippets**, **security controls**, **test/acceptance criteria**, and **sprint‑level milestones** so your team can start understanding them immediately. I’ll continue discussing the next groups (7–12, then 13–15) in the same format.
+
+---
+
+### 1. Asset Discovery Engine — deliverables & build tasks
+
+**Purpose**  
+Automatically find and reconcile endpoints, cloud resources, and networked devices so the canonical inventory is accurate and current.
+
+**Deliverables**
+- Discovery service (microservice) with agent and agentless connectors.
+- Lightweight endpoint agent packages (Windows MSI, macOS PKG, Linux .deb/.rpm).
+- Connectors: AD/LDAP, MDM (Intune/Workspace ONE), cloud APIs (AWS/Azure/GCP), SNMP/WMI/SSH scanner.
+- Reconciliation UI and API for unresolved discoveries.
+
+**Implementation tasks (MVP)**
+1. **Design**: finalize discovery data contract (see Data model below) and connector interface (pluggable adapters).
+2. **Agent**: build minimal agent that reports hardware identifiers, installed software list, disk serials, and heartbeat to discovery API over mTLS.
+3. **Agentless connectors**: implement AD/LDAP sync, MDM connector, and cloud inventory pull (AWS EC2, Azure VM, GCP Compute).
+4. **Network scanner**: integrate Nmap wrapper for agentless network discovery (configurable scopes).
+5. **Reconciliation engine**: fuzzy matching rules (serial, MAC, hostname, asset tag) and UI to resolve conflicts.
+6. **Scheduler & event hooks**: cron and event bus (webhooks) for on‑demand and scheduled scans.
+7. **Operationalization**: metrics, health checks, and rate limiting.
+
+**Data model (core fields)**
+```json
+{
+  "assetId":"uuid",
+  "discoverySource":"agent|ad|mdm|cloud|network",
+  "serialNumber":"string",
+  "assetTag":"string",
+  "hostname":"string",
+  "macAddresses":["string"],
+  "ipAddresses":["string"],
+  "os":{"name":"string","version":"string"},
+  "agentInstalled":true,
+  "lastSeen":"ISO8601",
+  "lifecycleState":"active|quarantine|retired",
+  "reconciliationStatus":"unmatched|matched|conflict",
+  "rawDiscoveryPayload":"object"
+}
+```
+
+**APIs**
+- `POST /api/discovery/scan` — trigger scan (body: scope, connector)
+- `GET /api/discovery/unmatched` — list unresolved discoveries
+- `POST /api/discovery/reconcile` — reconcile discovery to assetId
+
+**Security controls**
+- **Mutual TLS** for agent ↔ server; short‑lived certs issued by provisioning service.
+- **Credential vault** for connector credentials (KMS/Secrets Manager).
+- **Least privilege** service accounts for AD/cloud connectors.
+- **Rate limits** and connector throttling to avoid service disruption.
+
+**Tests & acceptance**
+- Discovery coverage ≥95% in test network (measured by seeded assets).
+- Reconciliation false positive rate <2% on test dataset.
+- Agent install/uninstall works on supported OSes; agent telemetry encrypted in transit.
+
+**Sprint milestones (2 sprints)**
+- Sprint 1: Data model, AD/MDM connectors, reconciliation UI prototype.
+- Sprint 2: Agent MVP, cloud connectors, network scanner, reconciliation rules.
+
+---
+
+### 2. Canonical Inventory Data Model — deliverables & build tasks
+
+**Purpose**  
+Provide a normalized, authoritative schema and storage layer for all asset records and histories.
+
+**Deliverables**
+- Relational schema (Postgres) + JSONB for flexible fields.
+- Asset history table and event store.
+- Graph relationships (optional Neo4j) for dependency mapping.
+- API layer (OpenAPI) for CRUD and queries.
+
+**Core schema (high level)**
+- `assets(id, asset_tag, serial, type, owner_id, lifecycle_state, location, cost_center, purchase_date, warranty_end, created_at)`
+- `asset_histories(id, asset_id, event_type, details_json, actor_id, created_at)`
+- `custody_records(id, asset_id, signer_id, evidence_links, geo, timestamp)`
+- `checklist_instances(id, template_id, asset_id, status, started_at, completed_at)`
+
+**APIs**
+- `GET /api/assets` (filters: owner, state, tag)
+- `GET /api/assets/{id}`
+- `PATCH /api/assets/{id}` (audit metadata required)
+- `GET /api/assets/{id}/history`
+
+**Security**
+- Field‑level encryption for sensitive fields (vendor banking, purchase price).
+- Row‑level access control by cost center and role.
+
+**Tests & acceptance**
+- Schema validated against sample datasets.
+- API returns consistent JSON and passes contract tests (OpenAPI).
+- Migration scripts and rollback tested.
+
+**Sprint milestones (1 sprint)**
+- Sprint 3: Schema implemented, API endpoints, sample data import, basic RBAC.
+
+---
+
+### 3. Checklist and Template Engine — deliverables & build tasks
+
+**Purpose**  
+Author, version, and run onboarding/retirement checklists with conditional logic, approvals, and evidence capture.
+
+**Deliverables**
+- Template editor UI (drag/drop steps).
+- Checklist runner UI (progress, step completion, evidence upload).
+- Template storage and versioning.
+- Step types: task, approval, conditional, timer, external action.
+
+**Template JSON example**
+```json
+{
+  "templateId":"tpl-laptop-retire-v1",
+  "name":"Laptop Retirement",
+  "version":1,
+  "steps":[
+    {"id":"s1","type":"task","title":"Backup user data","assigneeRole":"IT-Admin"},
+    {"id":"s2","type":"task","title":"Wipe disk","tool":"sanitizer-v2"},
+    {"id":"s3","type":"approval","title":"Approve redeploy","approverRole":"Security-Lead"},
+    {"id":"s4","type":"evidence","title":"Upload disposal certificate","required":true}
+  ]
+}
+```
+
+**APIs**
+- `POST /api/templates` — create/publish template
+- `GET /api/templates/{id}`
+- `POST /api/checklists` — instantiate for asset
+- `POST /api/checklists/{id}/steps/{stepId}/complete` — complete step with evidence
+
+**Security**
+- High‑risk steps require MFA and dual approval.
+- Evidence files stored encrypted; hashes anchored to audit trail.
+
+**Tests & acceptance**
+- Template editor publishes immutable versions.
+- Checklist instances record evidence and approvals; conditional logic executes correctly.
+
+**Sprint milestones (2 sprints)**
+- Sprint 4: Template editor MVP, checklist runner UI, evidence upload.
+- Sprint 5: Approval flows, conditional logic, versioning.
+
+---
+
+### 4. Workflow Orchestration — deliverables & build tasks
+
+**Purpose**  
+Automate cross‑system actions (HR offboard → checklist → AD disable → pickup scheduling).
+
+**Deliverables**
+- Orchestrator service (stateful workflow engine) with visual designer.
+- Connectors: HR (SCIM), AD, MDM, ITSM (ServiceNow/Jira), calendar.
+- Retry/compensation logic and SLA timers.
+
+**Implementation tasks**
+1. Choose engine (e.g., Temporal, Camunda, or custom lightweight orchestrator).
+2. Build connector SDK and sample connectors.
+3. Implement visual workflow designer and monitoring dashboard.
+4. Add audit hooks to log each action to the immutable trail.
+
+**APIs**
+- `POST /api/workflows/trigger` — start workflow
+- `GET /api/workflows/{id}/status`
+
+**Security**
+- Connector credentials in vault; actions logged with request/response.
+- Only workflow admins can modify production flows.
+
+**Tests & acceptance**
+- End‑to‑end test: HR termination triggers checklist and AD disable (simulated).
+- Orchestrator handles retries and compensations in failure scenarios.
+
+**Sprint milestones (2 sprints)**
+- Sprint 6: Engine integration, HR/AD connectors, sample workflow.
+- Sprint 7: Designer UI, monitoring, SLA timers.
+
+---
+
+### 5. Role Based Access Control — deliverables & build tasks
+
+**Purpose**  
+Enforce least privilege, separation of duties, and approval policies.
+
+**Deliverables**
+- RBAC service with roles, permissions, and resource scoping.
+- Policy engine supporting separation rules (e.g., cannot approve own asset).
+- SSO integration (SAML/OIDC) and MFA enforcement.
+
+**Implementation tasks**
+1. Define role taxonomy and permission matrix.
+2. Implement policy engine (OPA/Rego or custom).
+3. Integrate SSO and MFA; implement session management and device posture checks for high‑risk actions.
+4. Admin UI for role/policy management and policy simulation.
+
+**APIs**
+- `GET /api/roles`
+- `POST /api/policies/evaluate` — simulate policy
+
+**Security**
+- Enforce session timeouts and device posture for approvals.
+- Log all policy evaluations to audit trail.
+
+**Tests & acceptance**
+- Policy scenarios validated (dual approval, separation of duties).
+- SSO + MFA flows tested across identity providers.
+
+**Sprint milestones (1–2 sprints)**
+- Sprint 8: RBAC core, SSO integration, policy engine.
+- Sprint 9: Admin UI and policy simulation.
+
+---
+
+### 6. Immutable Audit Trail — deliverables & build tasks
+
+**Purpose**  
+Provide tamper‑evident, cryptographically anchored logs for all actions and evidence.
+
+**Deliverables**
+- Append‑only audit store with cryptographic chaining (prevHash).
+- Periodic anchoring to external timestamping/ledger service.
+- Audit viewer and signed export capability.
+
+**Implementation tasks**
+1. Design audit entry schema with payload hashing.
+2. Implement append‑only store (WORM storage or database with immutability layer).
+3. Implement periodic anchoring (e.g., timestamping service or blockchain anchor).
+4. Build audit viewer with verification tools.
+
+**Data model**
+```json
+{
+  "auditId":"uuid",
+  "timestamp":"ISO8601",
+  "actorId":"user-123",
+  "actionType":"checklist.step.complete",
+  "resourceId":"asset-456",
+  "payloadHash":"sha256:...",
+  "prevHash":"sha256:..."
+}
+```
+
+**APIs**
+- `GET /api/audit?resourceId=...`
+- `POST /api/audit/verify` — verify chain integrity
+
+**Security**
+- Only system processes can append; exports signed with system key.
+- Anchoring logs to external service prevents undetectable tampering.
+
+**Tests & acceptance**
+- Tamper test: modifying an entry fails verification.
+- Exported signed reports accepted by compliance team.
+
+**Sprint milestones (1 sprint)**
+- Sprint 10: Audit store, chaining, anchoring, viewer.
+
+---
+
+### Cross‑component integration, CI, and immediate next steps
+
+**Integration tasks**
+- Wire discovery → canonical inventory → checklist instantiation → workflow triggers → audit logging.
+- Implement end‑to‑end test harness that seeds assets, triggers HR offboard, runs checklist, and verifies audit entries and custody records.
+
+**CI/CD & security gates**
+- Add SAST, dependency scanning, container image scanning, and contract tests to pipeline.
+- Map acceptance criteria to automated tests so checklist items flip to “done” when tests pass.
+
+**Immediate next steps (first 10 weeks)**
+1. **Week 1–2**: Sprint 1–2 deliverables (Discovery connectors, reconciliation UI, data model).
+2. **Week 3–4**: Agent MVP, cloud connectors, canonical schema, API layer.
+3. **Week 5–6**: Template engine MVP, checklist runner, evidence capture.
+4. **Week 7–8**: Workflow engine integration, RBAC core, SSO/MFA.
+5. **Week 9–10**: Immutable audit trail, end‑to‑end tests, security hardening.
+
+**Deliverables I will produce next (automatically, in order)**
+- **HTML UI wireframes** for Inventory Dashboard, Checklist Editor, and Checklist Runner (interactive layout + component list).  
+- **OpenAPI contract** for core APIs (assets, discovery, templates, checklists, workflows, audit).  
+- **Sample JSON templates** for onboarding and retirement checklists and a sample asset record.
