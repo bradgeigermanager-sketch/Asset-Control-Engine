@@ -1,0 +1,774 @@
+### Inventory Dashboard, Checklist Editor, and Checklist Runner — Semantic HTML Wireframes
+
+Below are **production‑ready semantic HTML templates** for the three primary screens. Each file is a self‑contained snippet you can paste into a frontend project (React/Vue or plain HTML) and style with your component library. I include **component notes** and **data attributes** to make wiring to APIs straightforward.
+
+---
+
+#### Inventory Dashboard (semantic HTML)
+```html
+<!-- inventory-dashboard.html -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Inventory Dashboard</title>
+  <link rel="stylesheet" href="/styles/dashboard.css" />
+</head>
+<body>
+  <header class="app-header" role="banner">
+    <div class="brand">
+      <img src="/assets/logo.svg" alt="Org logo" class="logo" />
+      <h1 class="sr-only">Asset Control Engine</h1>
+    </div>
+
+    <div class="global-search" role="search">
+      <label for="search-input" class="sr-only">Search assets</label>
+      <input id="search-input" type="search" placeholder="Search asset tag, serial, hostname" aria-label="Search assets" />
+    </div>
+
+    <nav class="user-menu" aria-label="User menu">
+      <button id="user-btn" aria-haspopup="true" aria-expanded="false">Baymont ▾</button>
+    </nav>
+  </header>
+
+  <main class="layout" role="main">
+    <aside class="left-rail" aria-label="Filters and views">
+      <section class="kpis" aria-label="Key performance indicators">
+        <div class="kpi">Total Assets <strong id="kpi-total">12,430</strong></div>
+        <div class="kpi">Unreconciled <strong id="kpi-unmatched">124</strong></div>
+        <div class="kpi">Pending Retirement <strong id="kpi-pending">42</strong></div>
+        <div class="kpi">Open Checklists <strong id="kpi-checklists">18</strong></div>
+      </section>
+
+      <form id="filters" aria-label="Asset filters">
+        <fieldset>
+          <legend class="sr-only">Filter assets</legend>
+          <label>Lifecycle
+            <select name="lifecycle" id="filter-lifecycle">
+              <option value="">All</option>
+              <option value="active">Active</option>
+              <option value="quarantine">Quarantine</option>
+              <option value="retired">Retired</option>
+            </select>
+          </label>
+
+          <label>Owner
+            <input type="text" id="filter-owner" placeholder="Owner name or ID" />
+          </label>
+
+          <label>Cost center
+            <input type="text" id="filter-costcenter" placeholder="Cost center" />
+          </label>
+
+          <button type="button" id="apply-filters">Apply</button>
+        </fieldset>
+      </form>
+
+      <div class="saved-views" aria-label="Saved views">
+        <button class="view-btn">All assets</button>
+        <button class="view-btn">Unreconciled</button>
+        <button class="view-btn">Pending retirement</button>
+      </div>
+    </aside>
+
+    <section class="main-grid" aria-label="Assets table">
+      <div class="table-toolbar">
+        <button id="bulk-export">Export</button>
+        <button id="bulk-retire">Request Retirement</button>
+        <div class="last-scan">Last discovery: <time datetime="2026-06-17T20:00:00Z">20:00 UTC</time></div>
+      </div>
+
+      <table id="assets-table" role="table" aria-label="Assets">
+        <thead>
+          <tr>
+            <th scope="col"><input type="checkbox" id="select-all" aria-label="Select all" /></th>
+            <th scope="col">Asset Tag</th>
+            <th scope="col">Type</th>
+            <th scope="col">Hostname</th>
+            <th scope="col">Owner</th>
+            <th scope="col">State</th>
+            <th scope="col">Last Seen</th>
+            <th scope="col">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="assets-tbody">
+          <!-- Rows populated by JS -->
+          <tr data-asset-id="asset-001">
+            <td><input type="checkbox" /></td>
+            <td class="asset-tag">AT-0001</td>
+            <td class="asset-type">Laptop</td>
+            <td class="asset-hostname">JDOE-LAP-01</td>
+            <td class="asset-owner">Jane Doe</td>
+            <td class="asset-state">Active</td>
+            <td class="asset-lastseen"><time datetime="2026-06-17T19:58:00Z">36m ago</time></td>
+            <td class="asset-actions">
+              <button class="btn-claim" data-action="claim">Claim</button>
+              <button class="btn-reconcile" data-action="reconcile">Reconcile</button>
+              <button class="btn-checklist" data-action="checklist">Checklist</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <nav class="pagination" aria-label="Pagination">
+        <button aria-label="Previous page">◀</button>
+        <span>Page 1 of 250</span>
+        <button aria-label="Next page">▶</button>
+      </nav>
+    </section>
+
+    <aside class="detail-panel" id="asset-detail" aria-label="Asset details" hidden>
+      <header>
+        <h2 id="detail-title">AT-0001 — JDOE-LAP-01</h2>
+        <button id="close-detail" aria-label="Close details">✕</button>
+      </header>
+
+      <div class="detail-tabs" role="tablist" aria-label="Asset detail tabs">
+        <button role="tab" aria-selected="true" id="tab-overview">Overview</button>
+        <button role="tab" id="tab-checklists">Checklists</button>
+        <button role="tab" id="tab-custody">Custody</button>
+        <button role="tab" id="tab-audit">Audit</button>
+      </div>
+
+      <section id="overview-panel" role="region" aria-labelledby="tab-overview">
+        <dl>
+          <dt>Owner</dt><dd id="detail-owner">Jane Doe</dd>
+          <dt>Location</dt><dd id="detail-location">HQ — 3rd Floor</dd>
+          <dt>Lifecycle</dt><dd id="detail-lifecycle">Active</dd>
+          <dt>Warranty</dt><dd id="detail-warranty">2027-03-01</dd>
+        </dl>
+
+        <div class="relationships">
+          <h3>Related assets</h3>
+          <ul id="related-assets"></ul>
+        </div>
+      </section>
+
+      <section id="checklists-panel" role="region" aria-labelledby="tab-checklists" hidden>
+        <h3>Open checklists</h3>
+        <ul id="open-checklists"></ul>
+      </section>
+
+      <section id="custody-panel" role="region" aria-labelledby="tab-custody" hidden>
+        <h3>Chain of custody</h3>
+        <div id="custody-records"></div>
+      </section>
+
+      <section id="audit-panel" role="region" aria-labelledby="tab-audit" hidden>
+        <h3>Recent audit entries</h3>
+        <div id="recent-audit"></div>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="app-footer" role="contentinfo">
+    <small>System health: <span id="health">OK</span></small>
+  </footer>
+
+  <script src="/scripts/dashboard.js" defer></script>
+</body>
+</html>
+```
+
+**Component notes**
+- Use `data-asset-id` attributes to bind rows to API resources.
+- Table should support server‑side pagination and fuzzy search.
+- Actions are gated by RBAC checks in the UI and enforced server‑side.
+- Evidence uploads use client‑side hashing (`sha256`) before multipart upload; include `data-evidence-hash` on upload elements.
+
+---
+
+#### Checklist Editor (semantic HTML)
+```html
+<!-- checklist-editor.html -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Checklist Template Editor</title>
+  <link rel="stylesheet" href="/styles/editor.css" />
+</head>
+<body>
+  <header class="editor-header">
+    <h1 id="template-name">Template: Laptop Retirement</h1>
+    <div class="editor-actions">
+      <button id="save-draft">Save Draft</button>
+      <button id="publish-template">Publish</button>
+      <span id="template-version">v1</span>
+    </div>
+  </header>
+
+  <main class="editor-layout">
+    <aside class="step-palette" aria-label="Step palette">
+      <h2>Steps</h2>
+      <ul>
+        <li draggable="true" data-step-type="task">Task</li>
+        <li draggable="true" data-step-type="approval">Approval</li>
+        <li draggable="true" data-step-type="conditional">Conditional</li>
+        <li draggable="true" data-step-type="evidence">Evidence</li>
+        <li draggable="true" data-step-type="timer">Timer</li>
+      </ul>
+    </aside>
+
+    <section class="canvas" id="template-canvas" aria-label="Template canvas">
+      <!-- Vertical list of step blocks -->
+      <div class="step-block" data-step-id="s1" data-step-type="task">
+        <header>
+          <strong>Backup user data</strong>
+          <button class="btn-edit-step">Edit</button>
+        </header>
+        <div class="step-meta">Assignee: IT-Admin • Required</div>
+      </div>
+
+      <div class="step-block" data-step-id="s2" data-step-type="task">
+        <header>
+          <strong>Sanitize disk (NIST 800-88)</strong>
+          <button class="btn-edit-step">Edit</button>
+        </header>
+        <div class="step-meta">Assignee: Security-Operator • Required</div>
+      </div>
+    </section>
+
+    <aside class="properties-panel" id="properties-panel" aria-label="Step properties">
+      <h2>Step properties</h2>
+      <form id="step-properties-form">
+        <label>Title
+          <input type="text" id="prop-title" />
+        </label>
+
+        <label>Type
+          <select id="prop-type">
+            <option value="task">Task</option>
+            <option value="approval">Approval</option>
+            <option value="conditional">Conditional</option>
+            <option value="evidence">Evidence</option>
+            <option value="timer">Timer</option>
+          </select>
+        </label>
+
+        <label>Assignee role
+          <input type="text" id="prop-role" />
+        </label>
+
+        <label>Required
+          <input type="checkbox" id="prop-required" />
+        </label>
+
+        <label>High risk (requires sign-off)
+          <input type="checkbox" id="prop-highrisk" />
+        </label>
+
+        <div class="conditional-builder" id="conditional-builder" hidden>
+          <label>Condition expression
+            <input type="text" id="prop-condition" placeholder="asset.type == 'laptop'" />
+          </label>
+        </div>
+
+        <button type="button" id="save-step">Save step</button>
+      </form>
+    </aside>
+  </main>
+
+  <section class="version-history" aria-label="Version history">
+    <h3>Version history</h3>
+    <ul id="version-list">
+      <li>v1 — Published — 2026-06-17</li>
+    </ul>
+  </section>
+
+  <script src="/scripts/editor.js" defer></script>
+</body>
+</html>
+```
+
+**Component notes**
+- Drag/drop step blocks; on drop create a step object in the template JSON.
+- Conditional builder accepts a simple expression language; evaluate server‑side for safety.
+- Publishing triggers a sign‑off workflow when `highrisk` is checked.
+
+---
+
+#### Checklist Runner (semantic HTML)
+```html
+<!-- checklist-runner.html -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Checklist Runner</title>
+  <link rel="stylesheet" href="/styles/runner.css" />
+</head>
+<body>
+  <header class="runner-header">
+    <h1 id="runner-title">Laptop Retirement — AT-0001</h1>
+    <div class="asset-summary">
+      <span class="asset-tag">AT-0001</span>
+      <span class="asset-owner">Jane Doe</span>
+      <span class="lifecycle">Active</span>
+    </div>
+  </header>
+
+  <main class="runner-layout">
+    <nav class="steps-list" aria-label="Checklist steps">
+      <ol id="steps-ol">
+        <li data-step-id="s1" class="step pending">
+          <div class="step-head">
+            <span class="step-title">Backup user data</span>
+            <span class="step-status">Pending</span>
+          </div>
+          <div class="step-meta">Assignee: IT-Admin • Due in 48h</div>
+        </li>
+
+        <li data-step-id="s2" class="step blocked">
+          <div class="step-head">
+            <span class="step-title">Sanitize disk (NIST 800-88)</span>
+            <span class="step-status">Blocked</span>
+          </div>
+          <div class="step-meta">Assignee: Security-Operator</div>
+        </li>
+      </ol>
+    </nav>
+
+    <section class="active-step" id="active-step" aria-live="polite">
+      <h2 id="active-step-title">Backup user data</h2>
+      <p id="active-step-instructions">Ensure user data is backed up to corporate storage.</p>
+
+      <form id="evidence-form">
+        <label for="evidence-file">Upload evidence (zip or photo)</label>
+        <input id="evidence-file" type="file" accept=".zip,image/*" />
+
+        <label for="evidence-note">Notes</label>
+        <textarea id="evidence-note" rows="4"></textarea>
+
+        <button type="button" id="complete-step">Complete step</button>
+      </form>
+
+      <div class="approval-area" id="approval-area" hidden>
+        <h3>Approval required</h3>
+        <button id="approve-btn" data-mfa-required="true">Approve (MFA)</button>
+        <button id="reject-btn">Reject</button>
+      </div>
+    </section>
+
+    <aside class="timeline" aria-label="Checklist timeline">
+      <h3>Timeline</h3>
+      <ul id="timeline-list"></ul>
+      <div class="audit-hash">Audit hash: <code id="audit-hash">sha256:...</code></div>
+    </aside>
+  </main>
+
+  <script src="/scripts/runner.js" defer></script>
+</body>
+</html>
+```
+
+**Component notes**
+- Evidence upload: compute client hash, then upload to encrypted storage; send hash to API when completing step.
+- Approval button triggers an MFA flow; UI should show device posture check result before enabling approval.
+- Timeline entries are pulled from the audit API and show `actor`, `action`, `timestamp`, and `payloadHash`.
+
+---
+
+### OpenAPI Contract (core endpoints) — YAML skeleton
+
+Below is a **complete, extendable OpenAPI 3.1 skeleton** for the core services. Use it to generate server stubs and client SDKs.
+
+```yaml
+openapi: 3.1.0
+info:
+  title: Asset Control Engine API
+  version: "0.1.0"
+  description: Core APIs for assets, discovery, templates, checklists, workflows, and audit.
+
+servers:
+  - url: https://api.example.com
+    description: Production
+
+components:
+  securitySchemes:
+    oauth2:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.example.com/oauth2/token
+          scopes:
+            assets:read: Read assets
+            assets:write: Write assets
+            checklists:run: Run checklists
+            audit:read: Read audit logs
+            admin:all: Administrative actions
+
+  schemas:
+    UserRef:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+
+    Asset:
+      type: object
+      required: [id, assetTag, lifecycleState]
+      properties:
+        id:
+          type: string
+        assetTag:
+          type: string
+        serialNumber:
+          type: string
+        type:
+          type: string
+        hostname:
+          type: string
+        macAddresses:
+          type: array
+          items:
+            type: string
+        ipAddresses:
+          type: array
+          items:
+            type: string
+        owner:
+          $ref: '#/components/schemas/UserRef'
+        lifecycleState:
+          type: string
+          enum: [active, quarantine, retired]
+        lastSeen:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties: true
+
+    DiscoveryRecord:
+      type: object
+      properties:
+        id:
+          type: string
+        discoverySource:
+          type: string
+        rawPayload:
+          type: object
+
+    ChecklistTemplate:
+      type: object
+      properties:
+        templateId:
+          type: string
+        name:
+          type: string
+        version:
+          type: integer
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/Step'
+
+    Step:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [task, approval, conditional, timer, evidence]
+        title:
+          type: string
+        assigneeRole:
+          type: string
+        required:
+          type: boolean
+        properties:
+          type: object
+          additionalProperties: true
+
+    ChecklistInstance:
+      type: object
+      properties:
+        id:
+          type: string
+        templateId:
+          type: string
+        assetId:
+          type: string
+        status:
+          type: string
+          enum: [draft, active, completed, blocked]
+
+    AuditEntry:
+      type: object
+      properties:
+        auditId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        actorId:
+          type: string
+        actionType:
+          type: string
+        resourceId:
+          type: string
+        payloadHash:
+          type: string
+        prevHash:
+          type: string
+
+security:
+  - oauth2: [assets:read]
+
+paths:
+  /api/assets:
+    get:
+      summary: List assets
+      security:
+        - oauth2: [assets:read]
+      parameters:
+        - name: filter
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Asset list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Asset'
+                  total:
+                    type: integer
+
+    post:
+      summary: Create asset
+      security:
+        - oauth2: [assets:write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Asset'
+      responses:
+        '201':
+          description: Created
+
+  /api/assets/{id}:
+    get:
+      summary: Get asset by id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Asset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+
+    patch:
+      summary: Update asset
+      security:
+        - oauth2: [assets:write]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Updated
+
+  /api/discovery/scan:
+    post:
+      summary: Trigger discovery scan
+      security:
+        - oauth2: [assets:write]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope:
+                  type: string
+                connector:
+                  type: string
+      responses:
+        '202':
+          description: Scan accepted
+
+  /api/discovery/unmatched:
+    get:
+      summary: List unmatched discovery records
+      security:
+        - oauth2: [assets:read]
+      responses:
+        '200':
+          description: Unmatched list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DiscoveryRecord'
+
+  /api/templates:
+    post:
+      summary: Create checklist template
+      security:
+        - oauth2: [checklists:run]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChecklistTemplate'
+      responses:
+        '201':
+          description: Template created
+
+    get:
+      summary: List templates
+      security:
+        - oauth2: [checklists:run]
+      responses:
+        '200':
+          description: Template list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ChecklistTemplate'
+
+  /api/checklists:
+    post:
+      summary: Instantiate checklist for an asset
+      security:
+        - oauth2: [checklists:run]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                templateId:
+                  type: string
+                assetId:
+                  type: string
+      responses:
+        '201':
+          description: Checklist instance created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistInstance'
+
+  /api/checklists/{id}/steps/{stepId}/complete:
+    post:
+      summary: Complete a checklist step
+      security:
+        - oauth2: [checklists:run]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: stepId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                evidenceHash:
+                  type: string
+                notes:
+                  type: string
+      responses:
+        '200':
+          description: Step completed
+
+  /api/workflows/trigger:
+    post:
+      summary: Trigger a workflow
+      security:
+        - oauth2: [admin:all]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workflowId:
+                  type: string
+                payload:
+                  type: object
+      responses:
+        '202':
+          description: Workflow started
+
+  /api/audit:
+    get:
+      summary: Query audit entries
+      security:
+        - oauth2: [audit:read]
+      parameters:
+        - name: resourceId
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Audit entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AuditEntry'
+```
+
+**Notes**
+- Use this YAML as the canonical contract; generate server stubs and client SDKs.
+- Enforce scopes and require an additional `mfa` scope for endpoints that perform high‑risk actions (approve redeploy, vendor change).
+- Add rate limits and request size limits to protect connectors.
+
+---
+
+### Checklist (components 1–6)
+
+**Checklist:**
+
+- **Component 1 — Asset Discovery Engine:** *Spec complete; wireframe and API contract created; implementation tasks queued.*  
+- **Component 2 — Canonical Inventory Data Model:** *Schema and API contract defined; sample data templates provided.*  
+- **Component 3 — Checklist and Template Engine:** *Template JSON and editor wireframe delivered; runner UI provided.*  
+- **Component 4 — Workflow Orchestration:** *API endpoints and workflow trigger contract included; designer UI planned.*  
+- **Component 5 — Role Based Access Control:** *Policy model and MFA requirements specified in API contract.*  
+- **Component 6 — Immutable Audit Trail:** *Audit schema and anchoring approach defined; viewer UI included.*
