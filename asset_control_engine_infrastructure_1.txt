@@ -1,0 +1,423 @@
+### Overview
+
+This document produces **detailed, development‑ready specifications** for each required component in the checklist approved. Components are included **in order**, grouped for clarity, and each entry includes: **purpose**, **functional requirements**, **data model or API sketch**, **UI considerations**, **security controls**, **test/acceptance criteria**, and **implementation notes**. Use this as the authoritative blueprint to manage, integrate, and verify the suite.
+
+---
+
+### Core Infrastructure Components (1–6)
+
+#### 1. Asset Discovery Engine
+**Purpose**  
+Automatically discover and reconcile hardware, software, cloud resources, and networked devices using agent and agentless methods.
+
+**Functional requirements**
+- Agent mode: lightweight endpoint agent (Windows, macOS, Linux) reporting inventory, installed software, hardware identifiers, and disk serials.
+- Agentless mode: SNMP, WMI, SSH, cloud APIs (AWS, Azure, GCP), and network scans (Nmap/NetBIOS) for discovery.
+- Reconciliation: match discovered items to canonical inventory by serial, MAC, hostname, or asset tag.
+- Scheduling: incremental scans, on‑demand scans, and event‑driven discovery (new AD join, MDM enrollment).
+- Change detection: detect hardware changes, OS reimages, and software installs/uninstalls.
+
+**Data model (core fields)**
+```json
+{
+  "assetId":"uuid",
+  "assetTag":"string",
+  "serialNumber":"string",
+  "hostname":"string",
+  "macAddresses":["string"],
+  "ipAddresses":["string"],
+  "os":{"name":"Windows","version":"10.0.19044"},
+  "agentInstalled":true,
+  "lastSeen":"2026-06-17T20:00:00Z",
+  "lifecycleState":"active|retired|quarantine",
+  "owner":{"userId":"u-123","name":"Jane Doe","costCenter":"CC-001"}
+}
+```
+
+**API endpoints (examples)**
+- `POST /api/discovery/scan` — trigger scan for scope
+- `GET /api/assets?filter=unreconciled` — list unreconciled discoveries
+- `POST /api/assets/reconcile` — reconcile discovery to canonical asset
+
+**UI**
+- Discovery dashboard with live scan status, unresolved discoveries, and reconciliation actions.
+- Quick actions: claim discovery, create new asset, merge with existing asset.
+
+**Security controls**
+- Agent uses mutual TLS and short‑lived certificates.
+- Discovery credentials stored in KMS; vault access audited.
+- Least privilege for discovery accounts (read‑only where possible).
+
+**Tests and acceptance**
+- Detects ≥95% of endpoints in test network.
+- Reconciles MDM/AD records with <2% false positives.
+- Agent install/uninstall flows tested on supported OSes.
+
+**Implementation notes**
+- Start with agentless connectors for AD/MDM/cloud to get initial coverage; roll out agents for depth.
+- Provide offline import for CSV/legacy CMDB.
+
+---
+
+#### 2. Canonical Inventory Data Model
+**Purpose**  
+Provide a single, normalized schema for all asset types to support workflows, reporting, and integrations.
+
+**Schema highlights**
+- **Asset** (core): identifiers, lifecycleState, owner, location, costCenter, purchaseDate, warrantyEnd, depreciation, tags.
+- **AssetHistory**: timestamped events (state changes, transfers, checklist completions).
+- **ChecklistInstance**: link to templates and completed steps.
+- **CustodyRecord**: chain‑of‑custody entries with signer, timestamp, and evidence links.
+
+**Example relational model**
+- `assets(id, asset_tag, serial, type, owner_id, lifecycle_state, created_at)`
+- `asset_histories(id, asset_id, event_type, details, created_by, created_at)`
+- `checklist_templates(id, name, steps_json)`
+- `checklist_instances(id, template_id, asset_id, status, started_at, completed_at)`
+
+**API contract**
+- `GET /api/assets/{id}`
+- `PATCH /api/assets/{id}` — partial updates with audit metadata
+- `GET /api/assets/{id}/history`
+
+**Security**
+- Field‑level encryption for sensitive fields (purchasePrice, vendorBankAccount).
+- Access control by role and cost center.
+
+**Acceptance**
+- All assets returned by discovery map to canonical schema.
+- API returns consistent JSON and passes schema validation.
+
+---
+
+#### 3. Checklist and Template Engine
+**Purpose**  
+Create, version, and execute onboarding and retirement checklists with conditional logic, attachments, and approval gates.
+
+**Functional requirements**
+- Template builder UI with step types: task, approval, conditional branch, timer, external action (API call).
+- Steps support attachments (photos, certificates), signatures, and evidence fields.
+- Versioning: templates are immutable once published; new versions created for changes.
+- Instance lifecycle: draft → active → completed → archived.
+
+**Template JSON example**
+```json
+{
+  "templateId":"tpl-001",
+  "name":"Laptop Retirement Checklist",
+  "steps":[
+    {"id":"s1","type":"task","title":"Backup user data","assigneeRole":"IT-Admin"},
+    {"id":"s2","type":"task","title":"Wipe disk","tool":"sanitizer-v2"},
+    {"id":"s3","type":"approval","title":"Approve redeployment","approverRole":"Security-Lead"},
+    {"id":"s4","type":"evidence","title":"Upload disposal certificate","required":true}
+  ]
+}
+```
+
+**API**
+- `POST /api/templates` — create template
+- `POST /api/checklists` — instantiate checklist for asset
+- `POST /api/checklists/{id}/steps/{stepId}/complete` — complete step with evidence
+
+**UI**
+- Template editor with drag‑drop steps, conditional logic builder, and preview.
+- Checklist runner UI showing progress, pending approvals, and evidence upload.
+
+**Security**
+- Approvals require MFA for high‑risk steps (e.g., redeployment).
+- Audit trail for every step completion with signer identity and timestamp.
+
+**Acceptance**
+- Templates editable and publishable; checklist instances follow template and record evidence.
+- Conditional steps execute correctly in test scenarios.
+
+---
+
+#### 4. Workflow Orchestration
+**Purpose**  
+Automate tasks, notifications, SLA timers, and cross‑system actions (HR offboarding, AD disable, ticket creation).
+
+**Functional requirements**
+- Event bus for triggers (HR termination, asset flagged for retirement).
+- Orchestrator supports retries, compensation actions, and human approvals.
+- Connectors for AD, MDM, ITSM (ServiceNow/Jira), finance systems.
+
+**Example workflow**
+- Trigger: HR termination event → create checklist instance → disable AD account (after approval) → schedule asset pickup → generate disposal certificate.
+
+**API**
+- `POST /api/workflows/trigger` — start workflow
+- `GET /api/workflows/{id}/status`
+
+**UI**
+- Workflow designer with visual flow, connectors, and SLA timers.
+- Monitoring dashboard for running workflows and failed tasks.
+
+**Security**
+- Connector credentials in vault; actions logged with request/response.
+- Separation of duties: only workflow admin can modify production workflows.
+
+**Acceptance**
+- Workflows execute end‑to‑end in staging with simulated connectors.
+- SLA timers and retry logic validated.
+
+---
+
+#### 5. Role Based Access Control
+**Purpose**  
+Enforce least privilege, separation of duties, and dual approvals for sensitive actions.
+
+**Functional requirements**
+- RBAC model with roles, permissions, and resource scoping (by cost center, location).
+- Support for SSO (SAML/OIDC) and MFA.
+- Approval policies: single, dual, or committee approvals for actions like asset redeployment or vendor changes.
+
+**Policy example**
+- `role: RetirementApprover` — can approve retirement only if not the asset owner.
+- `policy: dualApprovalForRedeploy` — requires two distinct approvers with different roles.
+
+**API**
+- `GET /api/roles`
+- `POST /api/policies/evaluate` — simulate policy evaluation
+
+**UI**
+- Admin console for role management, policy simulation, and audit of approvals.
+
+**Security**
+- Enforce session timeouts, device posture checks for high‑risk approvals.
+- Log all policy evaluations and approvals to immutable audit trail.
+
+**Acceptance**
+- Policies enforce separation of duties in test scenarios.
+- SSO + MFA flows validated.
+
+---
+
+#### 6. Immutable Audit Trail
+**Purpose**  
+Provide tamper‑evident, append‑only logs for all actions, checklist steps, approvals, and disposal certificates.
+
+**Functional requirements**
+- Append‑only storage with cryptographic hashing of entries.
+- Periodic anchoring of log hashes to an external ledger or timestamping service.
+- Exportable signed reports for auditors.
+
+**Data model**
+- `auditEntry {id, timestamp, actorId, actionType, resourceId, payloadHash, prevHash}`
+
+**API**
+- `GET /api/audit?resourceId=...`
+- `POST /api/audit/verify` — verify chain integrity
+
+**UI**
+- Audit viewer with filters, hash verification, and export to signed PDF.
+
+**Security**
+- Logs immutable to application users; only system admin can request export.
+- Hash anchoring to external service to prove non‑tampering.
+
+**Acceptance**
+- Tamper test: altering a stored entry fails verification.
+- Exported signed reports accepted by compliance team.
+
+---
+
+### Operational Controls and Asset Handling Components (7–12)
+
+#### 7. Chain of Custody and Physical Verification
+**Purpose**  
+Record physical handoffs, capture photographic evidence, and collect signatures for retired assets.
+
+**Functional requirements**
+- Mobile UI for field agents to scan asset tag, capture photo, geolocation, and signer signature.
+- Generate PDF chain‑of‑custody certificate with timestamps and hashes of photos.
+- Support scheduled and surprise verification runs.
+
+**API**
+- `POST /api/custody/record` — record handoff
+- `GET /api/custody/{assetId}` — retrieve chain
+
+**Security**
+- Photos stored encrypted; EXIF stripped except geolocation if policy allows.
+- Signatures captured as vector paths and hashed.
+
+**Acceptance**
+- Field app records and generates certificate; certificate hash verifiable against audit trail.
+
+---
+
+#### 8. Data Sanitization and Certification Module
+**Purpose**  
+Wipe and certify devices before redeployment or disposal; produce signed wipe certificates.
+
+**Functional requirements**
+- Integrate with endpoint management tools to trigger secure erase (e.g., Microsoft Autopilot, vendor tools).
+- Support multiple wipe standards (DoD 5220.22‑M, NIST SP 800‑88).
+- Produce signed certificate with wipe method, operator, and verification hash.
+
+**API**
+- `POST /api/sanitization/start` — start wipe job
+- `GET /api/sanitization/{jobId}/status`
+
+**Security**
+- Wipe commands require dual approval for redeployment.
+- Wipe logs anchored to audit trail.
+
+**Acceptance**
+- Wipe verification shows device unbootable or data unrecoverable in test lab.
+
+---
+
+#### 9. Vendor and Transaction Controls
+**Purpose**  
+Prevent shell vendors, enforce KYC, and control proceeds from asset sales.
+
+**Functional requirements**
+- Vendor master with KYC fields, verification status, and change history.
+- Two‑step vendor change process: request → independent verification → approval.
+- Escrow integration for sale proceeds; automated reconciliation.
+
+**API**
+- `POST /api/vendors` — create vendor
+- `PATCH /api/vendors/{id}/verify` — mark verified
+
+**Security**
+- Vendor bank details tokenized; access restricted to finance roles.
+- Alerts for vendor changes and high‑value transactions.
+
+**Acceptance**
+- Vendor change requires two approvers; KYC fields validated.
+
+---
+
+#### 10. Reporting and Compliance Exports
+**Purpose**  
+Provide audit reports, certificates of destruction, and regulatory exports.
+
+**Functional requirements**
+- Prebuilt reports: retirement log, disposal certificates, chain‑of‑custody, financial reconciliation.
+- Scheduled exports in CSV/PDF and API access for auditors.
+- Report templates customizable per jurisdiction.
+
+**UI**
+- Report builder with filters, preview, and signed export.
+
+**Security**
+- Reports include signed hash and audit trail reference.
+
+**Acceptance**
+- Reports match source data and include verifiable signatures.
+
+---
+
+#### 11. API Layer and Integration Connectors
+**Purpose**  
+Expose secure APIs and connectors for MDM, AD, HR, ITSM, finance, and cloud providers.
+
+**Functional requirements**
+- OpenAPI spec for all endpoints.
+- Connector framework with pluggable adapters and retry/backoff.
+- Webhooks for event notifications.
+
+**Security**
+- OAuth2 client credentials for connectors; per‑connector scopes.
+- Rate limiting and monitoring.
+
+**Acceptance**
+- Integration tests with AD, ServiceNow, and one cloud provider pass.
+
+---
+
+#### 12. Anomaly Detection and Alerts
+**Purpose**  
+Detect suspicious redeployments, duplicate disposals, vendor anomalies, and reserve movements.
+
+**Functional requirements**
+- Stream processing of events to detect patterns: repeated leasebacks, same vendor receiving many retired assets, reserve account transfers.
+- Scoring engine with risk levels and automated alerts to security and compliance.
+- Case management integration for investigations.
+
+**Data inputs**
+- Asset events, vendor payments, checklist completions, custody records.
+
+**UI**
+- Alert dashboard with triage, assign, and investigation notes.
+
+**Acceptance**
+- Simulated fraud scenarios trigger alerts and create investigation cases.
+
+---
+
+### Platform, UI, and Operations Components (13–15)
+
+#### 13. UI Component Library and Theming
+**Purpose**  
+Provide accessible HTML UI components and theming for multi‑tenant customization.
+
+**Functional requirements**
+- Component library (React/Vue) with buttons, forms, tables, modals, and checklist runner.
+- Theming engine: color, logo, and CSS variables per tenant.
+- Accessibility: WCAG AA compliance, keyboard navigation, and screen reader labels.
+
+**Deliverables**
+- Storybook with components and usage docs.
+- Theme JSON schema.
+
+**Acceptance**
+- Components pass accessibility audit and render correctly with theme overrides.
+
+---
+
+#### 14. Test Harness and CI Pipeline
+**Purpose**  
+Automated testing and secure CI/CD pipeline to ensure quality and security.
+
+**Functional requirements**
+- Unit tests, integration tests, contract tests for APIs, and end‑to‑end tests for critical flows.
+- Security gates: SAST, dependency scanning, container image scanning.
+- Deployment pipeline with staging and canary deploys.
+
+**Acceptance**
+- Pipeline blocks merge on failing tests or security findings.
+
+---
+
+#### 15. Backup, Encryption, and Key Management
+**Purpose**  
+Protect data at rest and in transit and manage cryptographic keys securely.
+
+**Functional requirements**
+- Encrypt sensitive fields with envelope encryption using KMS.
+- Key rotation policy and HSM integration for production keys.
+- Backups encrypted and integrity‑checked; restore drills quarterly.
+
+**Acceptance**
+- Key rotation tested; restore drill completes within RTO.
+
+---
+
+### Development Process and Living Checklist
+
+**Versioning and ownership**
+- Each component tracked as `component:v{major}.{minor}` in backlog.
+- Assign **Owner** and **Security Owner** for each component; changes require both approvals.
+
+**Sprint integration**
+- Implement in vertical slices: pick Discovery Engine, Checklist Engine, and Immutable Audit Trail for first two sprints.
+- Tie acceptance criteria to automated tests so CI marks checklist items done.
+
+**Automated verification**
+- Map acceptance criteria to test suites and monitoring checks. When tests pass, mark checklist item complete automatically.
+
+**Change control**
+- Any checklist modification requires: owner, security sign‑off, and a changelog entry with rationale.
+
+**Quarterly review**
+- Security and Compliance revalidate high‑risk items and anomaly detection thresholds.
+
+---
+
+Additional documents include:
+HTML UI wireframes** for the Inventory Dashboard, Checklist Editor, and Checklist Runner (interactive layout and component list).  
+OpenAPI contract** for the core APIs (assets, checklists, workflows, audit).  
+Sample JSON templates** for onboarding and retirement checklists and a sample asset record.
