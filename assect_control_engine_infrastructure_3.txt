@@ -1,0 +1,313 @@
+### Inventory Dashboard Wireframe
+**Purpose**  
+Single pane of glass for asset visibility, reconciliation, and quick actions.
+
+**Layout**
+- **Header**: org logo, global search (asset tag, serial, hostname), user menu (profile, settings).
+- **Left rail**: filters (lifecycle state, owner, cost center, location, discovery source), saved views.
+- **Main grid**: paginated asset table with columns **Asset Tag | Type | Hostname | Owner | State | Last Seen | Actions**.
+- **Right column**: selected asset detail card (summary, relationships, checklist status, custody records, recent audit entries).
+- **Top strip**: KPI tiles — **Total Assets**, **Unreconciled Discoveries**, **Assets Pending Retirement**, **Open Checklists**.
+- **Footer**: system health, last discovery run timestamp.
+
+**Components**
+- Search bar with fuzzy matching and keyboard shortcuts.
+- Table with inline actions: **Claim**, **Reconcile**, **Create Checklist**, **Open History**.
+- Asset detail panel with tabs: **Overview**, **Checklists**, **Custody**, **Sanitization**, **Audit**.
+- Bulk actions toolbar for multi‑select operations (export, bulk retire request).
+
+**Interactions**
+- Click asset row → slide‑out detail panel.
+- Unmatched discovery flagged with orange badge; reconcile opens modal with suggested matches.
+- Quick create asset from discovery with prefilled fields.
+
+**Accessibility and UX**
+- WCAG AA color contrast; ARIA labels for table and controls.
+- Keyboard navigation for table rows and actions.
+- Responsive: two‑column collapse to single column on narrow screens.
+
+**Security**
+- Action buttons gated by RBAC; retirement actions require dual approval modal.
+- Evidence upload uses encrypted multipart upload with client‑side hashing.
+
+**Acceptance criteria**
+- Search returns results within 300ms for 100k assets.
+- Reconciliation flow reduces unmatched count by 90% in test dataset.
+- RBAC prevents unauthorized retirement actions in test scenarios.
+
+---
+
+### Checklist Editor Wireframe
+**Purpose**  
+Author and publish onboarding and retirement templates with conditional logic and approval gates.
+
+**Layout**
+- **Header**: template name, version, publish/unpublish buttons, status badge.
+- **Canvas**: drag‑and‑drop step blocks arranged vertically; step palette on right (Task, Approval, Conditional, Timer, External Action, Evidence).
+- **Properties panel**: step configuration (title, assignee role, SLA, required flag, attachments, MFA requirement).
+- **Preview pane**: simulate checklist run with sample asset data.
+- **Version history**: list of published versions with diff view.
+
+**Components**
+- Step blocks with color coding for type and risk level.
+- Conditional builder using simple rule expressions (if asset.type == "laptop" then include step).
+- Approval policy selector linking to RBAC policies (single, dual, committee).
+- Publish workflow requiring security sign‑off for high‑risk templates.
+
+**Interactions**
+- Drag step → drop into canvas; configure properties in panel.
+- Click Preview → run simulated checklist showing conditional branching.
+- Publish prompts immutable snapshot and increments version.
+
+**Accessibility and UX**
+- Visual indicators for required steps and high‑risk actions.
+- Inline help and examples for common templates.
+
+**Security**
+- Publishing high‑risk templates triggers mandatory legal/fiduciary sign‑off workflow.
+- Template edits create draft only; published versions immutable.
+
+**Acceptance criteria**
+- Templates can be created, previewed, and published; preview matches runtime behavior.
+- Conditional logic executes correctly in 95% of test cases.
+
+---
+
+### Checklist Runner Wireframe
+**Purpose**  
+Execute checklists against assets, capture evidence, and enforce approvals.
+
+**Layout**
+- **Header**: checklist title, asset summary, progress bar.
+- **Left column**: step list with status icons (pending, in progress, blocked, completed).
+- **Main pane**: active step details, assignee, instructions, evidence upload, action buttons.
+- **Right column**: checklist timeline, linked workflows, audit hash, attachments.
+
+**Components**
+- Step timer and SLA countdown.
+- Evidence capture widget: photo, file upload, signature pad, geolocation (optional).
+- Approval modal with MFA prompt for high‑risk approvals.
+- Escalation and reassignment controls.
+
+**Interactions**
+- Assignee completes step → evidence required if configured; system hashes evidence and appends to audit trail.
+- Approval step opens modal showing prior evidence and requires approver identity + MFA.
+- If a step fails, orchestrator triggers compensation actions and notifies stakeholders.
+
+**Accessibility and UX**
+- Clear progress indicators and next‑step guidance.
+- Mobile‑friendly evidence capture for field agents.
+
+**Security**
+- Evidence files encrypted at rest; hashes anchored to audit trail.
+- High‑risk approvals require device posture check and MFA.
+
+**Acceptance criteria**
+- Checklist instances record all step completions and evidence with verifiable hashes.
+- Approval flows enforce MFA and dual approver rules.
+
+---
+
+### OpenAPI Contract Skeleton for Core APIs
+**Overview**  
+Concise OpenAPI paths for assets, discovery, templates, checklists, workflows, and audit. Use JSON schema for models and OAuth2 for auth.
+
+**Security scheme**
+```yaml
+components:
+  securitySchemes:
+    oauth2:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.example.com/oauth2/token
+          scopes:
+            assets:read: Read assets
+            assets:write: Write assets
+            checklists:run: Run checklists
+```
+
+**Selected endpoints**
+```yaml
+paths:
+  /api/assets:
+    get:
+      summary: List assets
+      security: [{ oauth2: [assets:read] }]
+      parameters:
+        - name: filter
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: asset list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetList'
+
+  /api/assets/{id}:
+    get:
+      summary: Get asset
+      parameters:
+        - name: id
+          in: path
+          required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+
+  /api/discovery/scan:
+    post:
+      summary: Trigger discovery scan
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope: { type: string }
+                connector: { type: string }
+      responses:
+        '202': { description: accepted }
+
+  /api/templates:
+    post:
+      summary: Create template
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChecklistTemplate'
+      responses:
+        '201': { description: created }
+
+  /api/checklists:
+    post:
+      summary: Instantiate checklist
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                templateId: { type: string }
+                assetId: { type: string }
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChecklistInstance'
+
+  /api/audit:
+    get:
+      summary: Query audit entries
+      parameters:
+        - name: resourceId
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditList'
+```
+
+**Core schemas (abbreviated)**
+```yaml
+components:
+  schemas:
+    Asset:
+      type: object
+      properties:
+        id: { type: string }
+        assetTag: { type: string }
+        serialNumber: { type: string }
+        hostname: { type: string }
+        owner: { $ref: '#/components/schemas/UserRef' }
+        lifecycleState: { type: string, enum: [active, quarantine, retired] }
+        lastSeen: { type: string, format: date-time }
+
+    ChecklistTemplate:
+      type: object
+      properties:
+        templateId: { type: string }
+        name: { type: string }
+        version: { type: integer }
+        steps: { type: array, items: { $ref: '#/components/schemas/Step' } }
+
+    Step:
+      type: object
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [task, approval, conditional, timer, evidence] }
+        title: { type: string }
+        assigneeRole: { type: string }
+        required: { type: boolean }
+
+    ChecklistInstance:
+      type: object
+      properties:
+        id: { type: string }
+        templateId: { type: string }
+        assetId: { type: string }
+        status: { type: string, enum: [draft, active, completed, blocked] }
+
+    AuditEntry:
+      type: object
+      properties:
+        auditId: { type: string }
+        timestamp: { type: string, format: date-time }
+        actorId: { type: string }
+        actionType: { type: string }
+        resourceId: { type: string }
+        payloadHash: { type: string }
+```
+
+**Notes**
+- Use OpenAPI 3.1; generate server stubs and client SDKs.
+- Enforce scopes per endpoint; require MFA scope for high‑risk actions.
+
+---
+
+### Sample JSON Templates
+**Onboarding template**
+```json
+{
+  "templateId":"tpl-onboard-laptop-v1",
+  "name":"Laptop Onboarding",
+  "version":1,
+  "steps":[
+    {"id":"s1","type":"task","title":"Assign asset tag","assigneeRole":"Asset-Admin","required":true},
+    {"id":"s2","type":"task","title":"Enroll in MDM","assigneeRole":"Endpoint-Admin","required":true},
+    {"id":"s3","type":"task","title":"Install baseline software","assigneeRole":"SRE","required":true},
+    {"id":"s4","type":"evidence","title":"Confirm user acceptance","required":true}
+  ]
+}
+```
+
+**Retirement template**
+```json
+{
+  "templateId":"tpl-retire-laptop-v1",
+  "name":"Laptop Retirement",
+  "version":1,
+  "steps":[
+    {"id":"s1","type":"task","title":"Backup user data","assigneeRole":"IT-Admin","required":true},
+    {"id":"s2","type":"task","title":"Revoke access and licenses","assigneeRole":"Identity-Admin","required":true},
+    {"id":"s3","type":"task","title":"Sanitize disk (NIST 800-88)","assigneeRole":"Security-Operator","required":true},
+    {"id":"s4","type":"approval","title":"Approve disposal or redeploy","approverRole":"Compliance-Lead","required":true},
+    {"id":"s5","type":"evidence","title":"Upload disposal certificate","required":true}
+  ]
+}
+```
+
+---
+
+###
+Interactive HTML wireframe markup** for the three screens above (semantic HTML + component classes) and a **complete OpenAPI YAML file** for the core endpoints
