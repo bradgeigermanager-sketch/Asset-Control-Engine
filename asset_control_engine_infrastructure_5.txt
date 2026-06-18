@@ -1,0 +1,90 @@
+Included are full, development‑ready specifications for **Component 1 — Asset Discovery Engine** and **Component 2 — Canonical Inventory Data Model**, including deliverables, APIs, data schemas, UI notes, security controls, test criteria, and a short sprint plan. Below are the actionable artifacts and a compact comparison of discovery approaches to guide implementation.
+
+---
+
+### Quick decisions and key considerations
+- **Scope:** include different organization strategies for hardware, software, cloud, and IoT/OT
+- **Coverage target:** hybrid approach (agent + agentless) is recommended for breadth and depth.   [Secure.com](https://www.secure.com/blog/infrastructure-security/agentless-asset-vulnerability-discovery)  [Virima](https://virima.com/features/it-discovery)  
+- **Privacy/compliance:** define PII handling and retention for discovery payloads.  
+- **Rollout:** pilot on a single cost center for 4–6 weeks.
+
+---
+
+### Component 1 — Asset Discovery Engine (deliverables & essentials)
+**Deliverables:** discovery microservice, endpoint agent (Win/macOS/Linux), connectors (AD/LDAP, MDM, AWS/Azure/GCP), network scanner, reconciliation UI, scheduler, metrics. **Acceptance:** ≥95% coverage in pilot network; <2% reconciliation false positives.   [Virima](https://virima.com/features/it-discovery)  [Secure.com](https://www.secure.com/blog/infrastructure-security/agentless-asset-vulnerability-discovery)
+
+**Core data contract (excerpt)**  
+```json
+{
+  "assetId":"uuid",
+  "discoverySource":"agent|ad|mdm|cloud|network",
+  "serialNumber":"string",
+  "hostname":"string",
+  "macAddresses":["string"],
+  "ipAddresses":["string"],
+  "os":{"name":"string","version":"string"},
+  "lastSeen":"ISO8601",
+  "reconciliationStatus":"unmatched|matched|conflict"
+}
+```
+
+**APIs**  
+- `POST /api/discovery/scan` — trigger scan (scope, connector)  
+- `GET /api/discovery/unmatched` — list unresolved discoveries  
+- `POST /api/discovery/reconcile` — reconcile record → asset
+
+**UI notes**  
+- Dashboard: live scan status, unresolved discoveries, suggested matches.  
+- Quick actions: claim, merge, create asset from discovery.
+
+**Security controls**  
+- **mTLS** for agents; short‑lived certs; connector credentials in KMS.  
+- Least‑privilege service accounts for AD/cloud connectors.  
+- Encrypt discovery payloads in transit and at rest.
+
+**Tests**  
+- Seeded network test: detect ≥95% seeded endpoints.  
+- Reconciliation accuracy test with synthetic conflicts.
+
+---
+
+### Component 2 — Canonical Inventory Data Model (deliverables & essentials)
+**Deliverables:** Postgres schema + JSONB for flexible attributes; asset history/event store; custody records; OpenAPI CRUD endpoints. **Acceptance:** API contract validated; sample import of discovery data maps to canonical schema.
+
+**Relational model (high level)**  
+- `assets(id, asset_tag, serial, type, owner_id, lifecycle_state, location, cost_center, purchase_date)`  
+- `asset_histories(id, asset_id, event_type, details_json, actor_id, created_at)`  
+- `custody_records(id, asset_id, signer_id, evidence_links, geo, timestamp)`
+
+**APIs**  
+- `GET /api/assets` (filters)  
+- `GET /api/assets/{id}`  
+- `PATCH /api/assets/{id}` (audit metadata required)  
+- `GET /api/assets/{id}/history`
+
+**Data governance & security**  
+- Field‑level encryption for sensitive fields (purchasePrice, vendor banking).  
+- Row‑level access control by cost center and role.  
+- Retention policy and purge workflows for discovery payloads.
+
+**Operational notes**  
+- Use JSONB for vendor‑specific attributes; maintain strict canonical fields for reconciliation keys (serial, assetTag, MAC).  
+- Provide bulk import and reconciliation endpoints for CMDB/legacy data.
+
+---
+
+### Agent vs Agentless discovery — quick comparison
+
+| **Criterion** | **Agent** | **Agentless** | **Hybrid (recommended)** |
+|---|---:|---:|---|
+| **Depth** | High; process/software details | Medium; network/cloud metadata | Best balance |
+| **Coverage** | Misses unmanaged IoT/OT | Finds unmanaged devices | Broadest visibility |
+| **Deployment effort** | Higher (install agents) | Lower (connectors/APIs) | Moderate; phased rollout |
+| **Security posture** | Strong telemetry; needs secure provisioning | Requires credentialed access; careful vaulting | Combines strengths |   [Virima](https://virima.com/features/it-discovery)  [Secure.com](https://www.secure.com/blog/infrastructure-security/agentless-asset-vulnerability-discovery)
+
+---
+
+### Risks and mitigations (brief)
+- **Blind spots** if only one method used — **mitigate** with hybrid discovery.   [Secure.com](https://www.secure.com/blog/infrastructure-security/agentless-asset-vulnerability-discovery)  
+- **Credential exposure** for connectors — **mitigate** with vaulting, rotation, and least privilege.  
+- **Data privacy** for discovery payloads — **mitigate** with PII redaction and retention policies.
