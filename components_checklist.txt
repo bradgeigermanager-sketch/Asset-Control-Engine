@@ -1,0 +1,14 @@
+| **Component** | **Owner** | **Priority** | **Acceptance Criteria** |
+| --- | --- | --- | --- |
+| **Asset Discovery Engine** | Infra/DevOps | High | Discovers ≥95% seeded endpoints; connectors for AD/MDM/cloud present |
+| **Canonical Inventory Data Model** | Product/Architect | High | Schema implemented; API returns consistent JSON; sample import succeeds |
+| **Checklist and Template Engine** | Product/Workflow | High | Template editor publishes versions; checklist instances record evidence |
+| **Workflow Orchestration** | Backend/Integrations | High | HR trigger → checklist → AD disable simulated end-to-end |
+| **Role Based Access Control** | Security | High | SSO + MFA enforced; separation of duties validated in tests |
+| **Immutable Audit Trail** | Security/Compliance | High | Append-only logs; tamper verification test passes |
+| **Chain of Custody and Physical Verification** | Operations | Medium | Mobile capture produces signed custody PDF |
+| **Data Sanitization Module** | Security/Endpoint | High | Wipe logs and signed certificates generated and verified |
+| **Vendor and Transaction Controls** | Finance/Procurement | High | Vendor KYC flow and two-step vendor change enforced |
+| **Reporting and Compliance Exports** | Compliance | High | Prebuilt reports export signed PDFs and CSVs |
+| **API Layer and Integration Connectors** | API Team | High | OpenAPI spec present; connector tests pass |
+| **Anomaly Detection and Alerts** | Security/Analytics | Medium | Alerts for repeated leasebacks and reserve anomalies |
