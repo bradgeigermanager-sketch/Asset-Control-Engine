@@ -1,0 +1,226 @@
+### Seeded Test Dataset and Reconciliation Test Plan — Overview
+
+**Purpose**  
+Provide a reproducible, automated test dataset and step‑by‑step reconciliation test plan to validate the Discovery + Canonical Inventory APIs and reconciliation engine. The dataset is sized and structured to validate the acceptance targets you set earlier: **≥95% discovery coverage** and **<2% false‑positive reconciliation rate**. Use the dataset to run unit, integration, and end‑to‑end reconciliation tests in staging.
+
+**Contents delivered here**  
+1. **Dataset specification** (counts, schemas, and sample rows) for canonical assets and discovery records.  
+2. **CSV / JSON samples** you can paste into fixtures or import tools.  
+3. **Reconciliation test plan** with scenarios, expected outcomes, and pass/fail criteria.  
+4. **Automated test script templates** (pseudocode / curl / test runner examples).  
+5. **Metrics, reporting, and acceptance criteria** and how to mark items complete in the living checklist.
+
+---
+
+### 1 — Seeded dataset specification
+
+**High‑level counts (recommended)**  
+- **Canonical assets (seeded): 500** — realistic mix of asset types, manufacturers, and lifecycle states.  
+- **Discovery records: 150** — includes 100 straightforward discoveries that match seeded assets, 30 conflict cases (ambiguous or partial matches), and 20 orphan discoveries (no matching canonical asset).  
+- **Edge cases / anomalies: 50** — duplicates, spoofed MACs, changed hostnames, missing serials, and intentionally malformed payloads to test robustness.
+
+**Rationale**  
+- 500 assets gives scale for pagination and search performance tests.  
+- 100 matching discoveries validate coverage; 30 conflict cases exercise fuzzy matching and manual reconciliation UI; 20 orphans test create/ignore flows.  
+- 50 anomalies stress validation, error handling, and security controls.
+
+**Schemas**
+
+- **Canonical asset (JSON / CSV fields)**  
+  - `id` (uuid)  
+  - `assetTag` (string)  
+  - `serialNumber` (string)  
+  - `type` (laptop, desktop, server, switch, vm, printer, iot)  
+  - `manufacturer` (string)  
+  - `model` (string)  
+  - `hostname` (string)  
+  - `macAddresses` (semicolon separated)  
+  - `ipAddresses` (semicolon separated)  
+  - `ownerId` (string)  
+  - `ownerName` (string)  
+  - `costCenter` (string)  
+  - `location` (string)  
+  - `purchaseDate` (YYYY-MM-DD)  
+  - `warrantyEnd` (YYYY-MM-DD)  
+  - `lifecycleState` (active|quarantine|retired|disposed)  
+  - `metadata` (JSON string)  
+  - `createdAt` (ISO8601)  
+  - `updatedAt` (ISO8601)
+
+- **Discovery record (JSON / CSV fields)**  
+  - `id` (uuid)  
+  - `discoverySource` (agent|ad|mdm|cloud|network|manual)  
+  - `rawPayload` (JSON string)  
+  - `serialNumber` (string or empty)  
+  - `hostname` (string or empty)  
+  - `macAddresses` (semicolon separated or empty)  
+  - `ipAddresses` (semicolon separated or empty)  
+  - `os.name` (string)  
+  - `os.version` (string)  
+  - `lastSeen` (ISO8601)  
+  - `reconciliationStatus` (unmatched|matched|conflict) — initial value `unmatched`  
+  - `suggestedMatches` (JSON array; optional)
+
+---
+
+### 2 — Sample rows (copy/paste ready)
+
+**Canonical assets — CSV snippet (first 6 rows)**
+
+```csv
+id,assetTag,serialNumber,type,manufacturer,model,hostname,macAddresses,ipAddresses,ownerId,ownerName,costCenter,location,purchaseDate,warrantyEnd,lifecycleState,metadata,createdAt,updatedAt
+a1e8f9b2-0001,AT-0001,SN-ABC-1001,laptop,Dell,Latitude 7420,JDOE-LAP-01,00:11:22:33:44:55,10.0.1.12,u-1001,Jane Doe,CC-100,HQ-3F,2022-03-01,2025-03-01,active,"{""os"":""Windows 11""}",2026-06-01T12:00:00Z,2026-06-10T08:00:00Z
+a1e8f9b2-0002,AT-0002,SN-ABC-1002,laptop,Apple,MacBook Pro,JSMITH-MBP-01,00:11:22:33:44:66,10.0.1.13,u-1002,John Smith,CC-100,Remote-Home,2021-07-15,2024-07-15,active,"{""os"":""macOS 13""}",2026-06-01T12:00:00Z,2026-06-10T08:00:00Z
+a1e8f9b2-0003,AT-0003,SN-ABC-2001,server,HP,ProLiant,SRV-DB-01,00:11:22:33:44:77,10.0.2.10,u-2001,DB Team,CC-200,DC-1,2019-01-10,2024-01-10,active,"{""role"":""db""}",2026-06-01T12:00:00Z,2026-06-10T08:00:00Z
+a1e8f9b2-0004,AT-0004,SN-ABC-3001,switch,Cisco,Catalyst-9300,SW-CORE-01,00:11:22:33:44:88,10.0.0.2,u-3001,NetOps,CC-300,DC-1,2018-05-20,2023-05-20,active,"{""ports"":24}",2026-06-01T12:00:00Z,2026-06-10T08:00:00Z
+a1e8f9b2-0005,AT-0005,SN-ABC-4001,printer,HP,ColorLaser,PR-01,00:11:22:33:44:99,10.0.3.5,u-4001,Facilities,CC-400,HQ-2F,2020-11-11,2023-11-11,active,"{}",2026-06-01T12:00:00Z,2026-06-10T08:00:00Z
+a1e8f9b2-0006,AT-0006,SN-ABC-5001,iot,VendorX,SensorX,SENSOR-01,00:11:22:33:44:AA,10.0.4.20,u-5001,Facilities,CC-400,Factory-1,2023-02-01,2026-02-01,active,"{""firmware"":""1.2.3""}",2026-06-01T12:00:00Z,2026-06-10T08:00:00Z
+```
+
+**Discovery records — CSV snippet (first 8 rows)**
+
+```csv
+id,discoverySource,rawPayload,serialNumber,hostname,macAddresses,ipAddresses,os.name,os.version,lastSeen,reconciliationStatus
+d-0001,agent,"{...}",SN-ABC-1001,JDOE-LAP-01,00:11:22:33:44:55,10.0.1.12,Windows,11,2026-06-17T19:58:00Z,unmatched
+d-0002,mdm,"{...}",SN-ABC-1002,JSMITH-MBP-01,00:11:22:33:44:66,10.0.1.13,macOS,13,2026-06-17T19:50:00Z,unmatched
+d-0003,network,"{...}",,UNKNOWN-01,00:11:22:33:44:BB,10.0.5.50,Unknown,,2026-06-17T19:40:00Z,unmatched
+d-0004,cloud,"{...}",SN-ABC-2001,SRV-DB-01,00:11:22:33:44:77,10.0.2.10,Linux,5.15,2026-06-17T19:30:00Z,unmatched
+d-0005,agent,"{...}",SN-ABC-3001,SW-CORE-01,00:11:22:33:44:88,10.0.0.2,IOS,16.9,2026-06-17T19:20:00Z,unmatched
+d-0006,agent,"{...}",SN-ABC-4001,PR-01,00:11:22:33:44:99,10.0.3.5,Embedded,1.0,2026-06-17T19:10:00Z,unmatched
+d-0007,agent,"{...}",SN-ABC-5001,SENSOR-01,00:11:22:33:44:AA,10.0.4.20,RTOS,2.0,2026-06-17T19:05:00Z,unmatched
+d-0008,network,"{...}",SN-ABC-1001,JDOE-LAP-01,00:11:22:33:44:55,10.0.1.12,Windows,11,2026-06-17T19:00:00Z,unmatched
+```
+
+**Conflict examples (intentional)**
+
+- **Conflict A:** discovery record with `serialNumber` missing but `hostname` changed (hostname `JDOE-LAP-01` → `JDOE-LAP-01-CLONE`) and MAC differs by one nibble. Expect fuzzy match score below threshold → **reconciliationStatus: conflict**.  
+- **Conflict B:** two canonical assets share same MAC (simulated data error). Discovery matches both → **conflict**.
+
+---
+
+### 3 — Reconciliation test plan (scenarios and expected outcomes)
+
+**Test objectives**
+- Validate automatic matching logic (exact match on serial, high‑score fuzzy match on hostname/MAC).  
+- Validate conflict detection and manual reconciliation flows.  
+- Validate create/ignore flows for orphan discoveries.  
+- Measure coverage and false positive rate.
+
+**Test scenarios**
+
+1. **Exact serial match (happy path)**  
+   - **Input:** discovery record with `serialNumber` exactly matching a canonical asset.  
+   - **Expected:** automatic `matched` → API links discovery to asset; `reconciliationResponse.success=true`.  
+   - **Metric:** count matched / total matching discoveries.
+
+2. **High‑confidence fuzzy match (hostname + MAC)**  
+   - **Input:** discovery with matching hostname and MAC (both present) but serial missing.  
+   - **Expected:** suggested match with score ≥ `0.85` (configurable threshold) → auto‑link or present as suggested depending on policy.  
+   - **Metric:** precision of auto‑links when threshold used.
+
+3. **Low‑confidence fuzzy match → conflict**  
+   - **Input:** discovery with hostname similar (edit distance > 2) and MAC differs by one nibble.  
+   - **Expected:** `reconciliationStatus=conflict`; UI shows suggested matches; manual reconcile required.  
+   - **Metric:** conflict rate and manual resolution time.
+
+4. **Duplicate discovery (same device discovered twice)**  
+   - **Input:** two discovery records for same device within short time window.  
+   - **Expected:** system groups them; single reconciliation action links both to same asset.  
+   - **Metric:** duplicate grouping success.
+
+5. **Orphan discovery (no match)**  
+   - **Input:** discovery with no serial, unknown hostname, and MAC not in canonical.  
+   - **Expected:** `unmatched`; operator can `create` new asset or `ignore`.  
+   - **Metric:** orphan handling time and create flow correctness.
+
+6. **Conflicting canonical records (data error)**  
+   - **Input:** discovery matches two canonical assets (same MAC in DB).  
+   - **Expected:** `conflict`; reconciliation API returns `403` if policy forbids auto‑merge; manual merge required.  
+   - **Metric:** conflict detection rate.
+
+7. **Malicious / malformed payload**  
+   - **Input:** discovery with malformed JSON or injected fields.  
+   - **Expected:** discovery rejected or sanitized; no code execution; entry logged and flagged.  
+   - **Metric:** safe handling and logging.
+
+8. **Connector credential failure**  
+   - **Input:** connector returns 401/403 during scan.  
+   - **Expected:** scan job fails gracefully; error logged; no partial writes.  
+   - **Metric:** connector error handling.
+
+**Pass/fail rules**
+- **Coverage pass:** ≥95% of seeded matching discoveries are automatically matched or suggested correctly (depending on policy).  
+- **False positive pass:** <2% of automatic matches are incorrect (i.e., linked to wrong canonical asset).  
+- **Conflict handling pass:** all conflict cases must be surfaced to UI and resolvable; manual resolution must produce audit entry.  
+- **Security pass:** malformed payloads must not cause server errors or data corruption.
+
+---
+
+### 4 — Automated test scripts and execution plan
+
+**Test harness approach**
+- Use a test runner (e.g., pytest, Mocha, or a CI job) that:
+  1. Loads canonical assets CSV into the test database via `POST /api/assets` or bulk import endpoint.  
+  2. Posts discovery records to `POST /api/discovery` or injects them into discovery store.  
+  3. Triggers reconciliation suggestions via `POST /api/reconciliation/suggestions` and/or `POST /api/discovery/reconcile`.  
+  4. Validates API responses and queries `GET /api/assets/{id}/history` and `GET /api/discovery/unmatched` for expected states.  
+  5. Collects metrics and writes a test report.
+
+**Example pseudocode (pytest style)**
+
+```python
+def test_exact_serial_match(client, seeded_assets, seeded_discoveries):
+    # seed assets
+    for asset in seeded_assets:
+        client.post("/api/assets", json=asset, headers=auth_headers)
+    # post discovery that matches asset SN-ABC-1001
+    resp = client.post("/api/discovery", json=discovery_sn_1001, headers=auth_headers)
+    assert resp.status_code == 201
+    # trigger reconcile
+    rec = client.post("/api/discovery/reconcile", json={"discoveryId": resp.json()["id"], "action":"link", "assetId": "a1e8f9b2-0001"}, headers=auth_headers)
+    assert rec.json()["success"] is True
+    # verify discovery status
+    d = client.get(f"/api/discovery/{resp.json()['id']}", headers=auth_headers).json()
+    assert d["reconciliationStatus"] == "matched"
+```
+
+**Curl example to trigger scan and reconcile**
+
+```bash
+# trigger network scan
+curl -X POST https://staging.api.example.com/api/discovery/scan \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"scope":"10.0.0.0/16","connector":"network"}'
+
+# reconcile discovery
+curl -X POST https://staging.api.example.com/api/discovery/reconcile \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"discoveryId":"d-0001","assetId":"a1e8f9b2-0001","action":"link"}'
+```
+
+**Automated metrics collection**
+- After test run, compute:
+  - `matched_count = count(discoveries where reconciliationStatus == matched and discovery.serialNumber in seeded assets)`
+  - `false_positive_count = count(manual_review where matched asset != expected asset)`
+  - `coverage = matched_count / expected_matching_discoveries`
+  - `false_positive_rate = false_positive_count / matched_count`
+
+Store metrics in CI artifacts and fail pipeline if `coverage < 0.95` or `false_positive_rate >= 0.02`.
+
+---
+
+### 5 — Reporting, dashboards, and acceptance criteria
+
+**Daily test report (CI artifact)**  
+- **Summary:** total assets seeded, total discoveries posted, matched, conflicts, orphans, anomalies.  
+- **Metrics:** coverage %, false positive %, average manual reconciliation time, number of security rejections.  
+- **Failures:** list of failing test cases with discoveryId, suggestedMatches, and API responses.  
+- **Audit evidence:** sample audit entries for reconciliations and manual approvals.
+
+**Acceptance criteria (final)**
+- **Functional:** discovery endpoints accept and store records; reconciliation API performs expected actions.  
+- **Quality:** coverage ≥95%; false positive rate <2%; conflict cases surfaced and resolvable.  
+- **Security:** malformed payloads handled safely; connector credential failures logged and do not write partial data.  
+- **Performance:** search and reconciliation suggestions return within 500ms for single record; bulk reconciliation job processes 1,000 records/minute in staging hardware profile.
