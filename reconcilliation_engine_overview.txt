@@ -1,0 +1,311 @@
+### Overview
+A **production‑grade reconciliation engine** scaffold that you can run, extend, and deploy. It includes a **Python backend (FastAPI)** for ingestion, canonical storage, matching, reconciliation, and audit; a **matching engine** with staged pipeline and configurable parameters; a **React + TypeScript HTML UI** (JSX) for Inventory Dashboard, Checklist Editor, and Checklist Runner; seed data generators (CSV/JSON); automated tests; and CI guidance. All artifacts are modular so you can replace components (DB, workflow engine, auth) with your stack.
+
+---
+
+### Architecture and components
+**High level**
+- **Ingest layer**: connectors (agent, AD/MDM, cloud, network) → `/api/discovery`  
+- **Normalization & store**: Postgres (JSONB) canonical `assets`, `discovery_records`, `audit_entries`  
+- **Matching engine**: staged pipeline (exact → composite → fuzzy → secondary signals) with configurable weights and thresholds  
+- **Resolution layer**: auto‑link, create, ignore, or route to manual review queue; supports rollback window  
+- **Audit & anchoring**: append‑only audit entries with payload hashes and periodic anchoring  
+- **UI**: React + TypeScript (JSX) for operators and reviewers  
+- **Tests & CI**: pytest harness, seed generator, GitHub Actions template
+
+**Core services**
+- `api` (FastAPI) — ingestion, assets, discovery, reconciliation, audit  
+- `matcher` (Python module) — scoring and decision logic  
+- `ui` (React + TypeScript) — operator workflows  
+- `data` — CSV/JSON seeds and generator script  
+- `tests` — pytest suite for coverage and FP metrics
+
+---
+
+### Backend: Python reference implementation (FastAPI)
+**Files:** `api/main.py`, `api/matcher.py`, `api/config.json`, `api/models.py`, `api/audit.py`
+
+#### `api/main.py` (abridged)
+```python
+# api/main.py
+from fastapi import FastAPI, HTTPException, Depends
+from pydantic import BaseModel
+from typing import List, Optional
+import uuid, hashlib, json, datetime
+from .matcher import Matcher
+from .audit import AuditStore
+from .models import Asset, DiscoveryRecord
+
+app = FastAPI(title="Asset Control Engine")
+
+# load config
+with open("api/config.json") as f:
+    CONFIG = json.load(f)
+
+matcher = Matcher(CONFIG)
+audit = AuditStore("data/audit_store.jsonl")
+
+# simple in-memory stores for prototype (replace with Postgres)
+ASSETS = {}          # id -> Asset dict
+DISCOVERIES = {}     # id -> DiscoveryRecord dict
+
+class DiscoveryIn(BaseModel):
+    id: Optional[str]
+    discoverySource: str
+    rawPayload: dict
+    serialNumber: Optional[str] = ""
+    hostname: Optional[str] = ""
+    macAddresses: Optional[List[str]] = []
+    ipAddresses: Optional[List[str]] = []
+    lastSeen: Optional[str] = None
+
+@app.post("/api/discovery", status_code=201)
+def post_discovery(d: DiscoveryIn):
+    did = d.id or f"d-{uuid.uuid4()}"
+    rec = d.dict()
+    rec["id"] = did
+    rec["reconciliationStatus"] = "unmatched"
+    DISCOVERIES[did] = rec
+    audit.append(actor="system", action="discovery.ingest", resourceId=did, payload=rec)
+    return {"id": did}
+
+@app.post("/api/reconciliation/suggest")
+def suggest(discoveryId: str):
+    rec = DISCOVERIES.get(discoveryId)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Discovery not found")
+    suggestions = matcher.suggest(rec, list(ASSETS.values()))
+    audit.append(actor="system", action="reconciliation.suggest", resourceId=discoveryId, payload={"suggestions": suggestions})
+    return {"suggestions": suggestions}
+
+@app.post("/api/discovery/reconcile")
+def reconcile(discoveryId: str, action: str, assetId: Optional[str] = None, actor: Optional[str] = "operator"):
+    rec = DISCOVERIES.get(discoveryId)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Discovery not found")
+    if action == "link":
+        if not assetId or assetId not in ASSETS:
+            raise HTTPException(status_code=400, detail="assetId required")
+        rec["reconciliationStatus"] = "matched"
+        rec["linkedAssetId"] = assetId
+        audit.append(actor=actor, action="reconciliation.link", resourceId=discoveryId, payload={"assetId": assetId})
+        return {"success": True, "assetId": assetId}
+    if action == "create":
+        new_id = f"a-{uuid.uuid4()}"
+        asset = {
+            "id": new_id,
+            "assetTag": f"AT-{str(uuid.uuid4())[:8]}",
+            "serialNumber": rec.get("serialNumber"),
+            "hostname": rec.get("hostname"),
+            "macAddresses": rec.get("macAddresses"),
+            "lifecycleState": "active",
+            "createdAt": datetime.datetime.utcnow().isoformat() + "Z"
+        }
+        ASSETS[new_id] = asset
+        rec["reconciliationStatus"] = "matched"
+        rec["linkedAssetId"] = new_id
+        audit.append(actor=actor, action="reconciliation.create", resourceId=discoveryId, payload={"assetId": new_id})
+        return {"success": True, "assetId": new_id}
+    if action == "ignore":
+        rec["reconciliationStatus"] = "ignored"
+        audit.append(actor=actor, action="reconciliation.ignore", resourceId=discoveryId, payload={})
+        return {"success": True}
+    raise HTTPException(status_code=400, detail="unknown action")
+```
+
+#### `api/matcher.py` (core scoring)
+```python
+# api/matcher.py
+import difflib, math
+from typing import List, Dict
+from rapidfuzz import fuzz, distance
+
+class Matcher:
+    def __init__(self, config: Dict):
+        self.cfg = config
+        self.weights = config["fuzzyMatch"]["compositeScoring"]["weights"]
+        self.auto_threshold = config["fuzzyMatch"]["compositeScoring"]["autoLinkScoreThreshold"]
+        self.suggest_threshold = config["fuzzyMatch"]["compositeScoring"]["suggestScoreThreshold"]
+
+    def score_pair(self, discovery: Dict, asset: Dict) -> float:
+        score = 0.0
+        total_weight = sum(self.weights.values())
+        # serial exact
+        if discovery.get("serialNumber") and asset.get("serialNumber") and discovery["serialNumber"] == asset["serialNumber"]:
+            score += self.weights["serial"]
+        # assetTag
+        if discovery.get("assetTag") and asset.get("assetTag") and discovery["assetTag"] == asset["assetTag"]:
+            score += self.weights["assetTag"]
+        # mac: exact or hamming
+        d_macs = discovery.get("macAddresses") or []
+        a_macs = asset.get("macAddresses") or []
+        if set(d_macs) & set(a_macs):
+            score += self.weights["mac"]
+        else:
+            # allow one nibble difference
+            for dm in d_macs:
+                for am in a_macs:
+                    if self._mac_hamming(dm, am) <= self.cfg["fuzzyMatch"]["mac"]["maxNibbleDifferences"]:
+                        score += self.weights["mac"] * 0.8
+                        break
+        # hostname fuzzy
+        if discovery.get("hostname") and asset.get("hostname"):
+            jw = fuzz.WRatio(discovery["hostname"], asset["hostname"]) / 100.0
+            score += self.weights["hostname"] * jw
+        # model fuzzy
+        if discovery.get("model") and asset.get("model"):
+            mscore = fuzz.WRatio(discovery["model"], asset["model"]) / 100.0
+            score += self.weights["model"] * mscore
+        # normalize
+        return score / total_weight
+
+    def suggest(self, discovery: Dict, assets: List[Dict]):
+        scored = []
+        for a in assets:
+            s = self.score_pair(discovery, a)
+            scored.append({"assetId": a["id"], "score": round(s, 4)})
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        # return top 5
+        return scored[:5]
+
+    def _mac_hamming(self, a, b):
+        # compare hex strings ignoring separators
+        a_clean = a.replace(":", "").lower()
+        b_clean = b.replace(":", "").lower()
+        if len(a_clean) != len(b_clean):
+            return 99
+        diffs = sum(1 for x,y in zip(a_clean, b_clean) if x!=y)
+        # nibble differences = diffs
+        return diffs
+```
+
+#### `api/audit.py` (append-only)
+```python
+# api/audit.py
+import json, hashlib, time
+class AuditStore:
+    def __init__(self, path):
+        self.path = path
+    def append(self, actor, action, resourceId, payload):
+        entry = {
+            "timestamp": time.time(),
+            "actorId": actor,
+            "actionType": action,
+            "resourceId": resourceId,
+            "payloadHash": hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+        }
+        with open(self.path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+```
+
+**Notes**
+- Replace in‑memory stores with Postgres + JSONB and add indexes on `serialNumber`, `macAddresses`, `assetTag`.
+- Use OAuth2 + MFA enforcement middleware for high‑risk endpoints.
+- Add background job to anchor audit hashes to external timestamping service.
+
+---
+
+### Frontend: React + TypeScript (JSX) skeleton
+**Project layout:** `ui/src/` with `components/Inventory`, `components/Editor`, `components/Runner`, `services/api.ts`
+
+#### `services/api.ts` (TypeScript)
+```ts
+// ui/src/services/api.ts
+const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:8000";
+
+export async function fetchAssets(q?: string) {
+  const url = new URL(`${API_BASE}/api/assets`);
+  if (q) url.searchParams.set("q", q);
+  const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` }});
+  return r.json();
+}
+
+export async function postDiscovery(d: any) {
+  const r = await fetch(`${API_BASE}/api/discovery`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("token")}` },
+    body: JSON.stringify(d)
+  });
+  return r.json();
+}
+
+export async function suggest(discoveryId: string) {
+  const r = await fetch(`${API_BASE}/api/reconciliation/suggest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("token")}` },
+    body: JSON.stringify({ discoveryId })
+  });
+  return r.json();
+}
+```
+
+#### Inventory Dashboard (JSX snippet)
+```tsx
+// ui/src/components/Inventory/InventoryTable.tsx
+import React, { useEffect, useState } from "react";
+import { fetchAssets } from "../../services/api";
+
+export const InventoryTable: React.FC = () => {
+  const [assets, setAssets] = useState<any[]>([]);
+  useEffect(() => {
+    fetchAssets().then(r => setAssets(r.items || []));
+  }, []);
+  return (
+    <div className="inventory">
+      <header><h2>Assets</h2></header>
+      <table className="assets-table" role="table">
+        <thead><tr><th>Tag</th><th>Type</th><th>Hostname</th><th>Owner</th><th>State</th></tr></thead>
+        <tbody>
+          {assets.map(a => (
+            <tr key={a.id} data-asset-id={a.id}>
+              <td>{a.assetTag}</td>
+              <td>{a.type}</td>
+              <td>{a.hostname}</td>
+              <td>{a.owner?.name}</td>
+              <td>{a.lifecycleState}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+```
+
+#### Checklist Editor & Runner
+- Use the wireframes provided earlier. Implement drag/drop with `react-beautiful-dnd` and evidence upload using client‑side hashing (`crypto.subtle.digest('SHA-256', ...)`) before multipart upload.
+- Approval flows call `/api/discovery/reconcile` with `action=link/create` and include `X-MFA-Token` header for high‑risk steps.
+
+---
+
+### Data files, seed generator, and tests
+**Seed generator**: use the `generate_seeds.py` script provided earlier (place in repo root). It produces `assets_seed.csv`, `discoveries_seed.csv`, `anomalies_seed.csv`.
+
+**Database import**
+- Provide a small script `scripts/import_csv.py` to bulk insert into Postgres using `COPY` or `psycopg2` with JSONB mapping.
+
+**Tests**
+- `tests/test_reconciliation.py` (pytest) provided earlier; extend with conflict resolution, orphan create, malformed payload handling, and rollback tests.
+- Add SAST and dependency scanning in CI.
+
+---
+
+### Deployment, security, and operations
+**Deployment**
+- Containerize services (Docker). Use Kubernetes or managed App Service for production.
+- Use Postgres for canonical store; S3 (or equivalent) for evidence storage; KMS/HSM for keys.
+
+**Security**
+- **Auth**: OAuth2 (client credentials) + SSO; require MFA for `mfaRequiredFor` endpoints.  
+- **Secrets**: store connector credentials in Vault/Secrets Manager; rotate regularly.  
+- **Encryption**: TLS everywhere; envelope encryption for sensitive fields (purchasePrice, vendor bank).  
+- **Audit**: append‑only logs anchored hourly; signed export for auditors.  
+- **RBAC**: enforce separation of duties (policy engine like OPA/Rego).
+
+**Monitoring**
+- Emit metrics: `coverage`, `falsePositiveRate`, `conflictRate`, `manualResolutionTime`.  
+- Alerts: coverage < 0.95 or falsePositiveRate ≥ 0.02.
+
+**Operational playbook**
+- Manual review SLA: 24 hours; conflict escalation: 8 hours.  
+- Rollback window: 72 hours for auto‑links; automated reversal creates audit entry and reassigns discovery to manual queue.
