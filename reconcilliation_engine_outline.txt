@@ -1,0 +1,34 @@
+A production reconciliation engine as a modular service that ingests heterogeneous discovery feeds, normalizes records, applies a staged matching pipeline with configurable scoring and authority rules, and routes low‑confidence cases to a human review queue with full audit and rollback. **Start with deterministic exact matches, add composite and fuzzy scoring, enforce attribute authority, and instrument coverage and false‑positive metrics.**
+
+### Key considerations and decision points
+- **Scope** of assets to cover now laptops, servers, network gear, VMs, and IoT.  
+- **Authoritative sources** per attribute such as ITAM for serials and NetworkInventory for MACs.  
+- **Auto‑link policy** per asset class to balance coverage and risk.  
+- **Operational SLAs** for manual queue resolution and rollback windows.
+
+### Comparison of matching techniques
+| **Technique** | **Primary signal** | **Auto‑link suitability** | **Typical threshold** | **Notes** |
+|---|---:|---:|---:|---|
+| **Exact** | serialNumber, assetTag | High | N/A | Near zero false positives. |
+| **Composite** | MAC + hostname or MAC + model | High for servers and laptops | Require both present | Very reliable when MAC authoritative. |
+| **Fuzzy** | hostname, model | Medium | Jaro‑Winkler 0.88–0.97 | Tune by length buckets. |
+| **Phonetic** | ownerName, manufacturer | Low | Use as secondary signal | Helps human review only. |
+| **Scoring** | weighted composite | High when threshold ≥0.90 | 0.90 auto, 0.70 suggest | Combine source trust and recency. |
+
+### Architecture overview
+**Ingestion layer** accepts connectors for agents, AD, MDM, cloud APIs, network scans, and file drops. **Normalization** maps source fields to a canonical asset schema and redacts PII. **Matching engine** runs a staged pipeline exact then composite then fuzzy scoring and emits a confidence score. **Resolution layer** auto‑links above a per‑class threshold and routes conflicts to a manual review queue with dual‑approval gates for high‑risk actions. **Audit layer** appends cryptographic hashes and anchors logs for tamper evidence. This layered design follows modern reconciliation architecture patterns and ingestion best practices.   [naya.finance](https://naya.finance/blog/reconciliation-engine-architecture)
+
+### Core components and APIs
+- **Connectors** with idempotent ingestion and dead‑letter handling.  
+- **Canonical store** with JSONB metadata and event history.  
+- **Matching service** exposing `/reconciliation/suggest` and `/reconciliation/apply` endpoints.  
+- **Manual review UI** with evidence, suggested matches, and rollback actions.  
+- **Metrics API** emitting coverage, false‑positive rate, conflict rate, and manual resolution time. Enterprise case studies show unified platforms and mobile verification dramatically improve reconciliation accuracy.   [assetcues.com](https://www.assetcues.com/case-study/it-asset-reconciliation-enterprise/)  [assetcues.com](https://www.assetcues.com/whitepaper/it-asset-register-reconciliation/)
+
+### Scoring, thresholds, and tuning
+- **Weights** example serial 0.45, mac 0.20, hostname 0.15, model 0.05.  
+- **Auto‑link** threshold default 0.90 and **suggest** threshold 0.70.  
+- **Per‑class overrides** tighten server thresholds and disable auto‑link for OT devices. Use seeded datasets and CI tests to iterate thresholds until coverage and false‑positive targets are met. Best practice guidance and policy design are essential to keep reconciliation repeatable and auditable.   [assetcues.com](https://www.assetcues.com/blog/fixed-asset-reconciliation/)
+
+### Operations, governance, and risks
+- **Enforce attribute authority** so only trusted sources update canonical fields. **Log every action** and require MFA and dual approvals for creates and redeploys. **Monitor** coverage and false positives and alert when thresholds breach. Weak governance causes recurring mismatches and audit exposure so embed roles, controls, and evidence requirements into workflows.   [assetcues.com](https://www.assetcues.com/blog/reconciliation-in-asset-management/)
