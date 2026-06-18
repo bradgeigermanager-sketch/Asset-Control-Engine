@@ -1,0 +1,59 @@
+**Quick answer:** **Start with a deterministic exact‑match pass (serial, asset_tag), then apply a staged fuzzy pipeline (hostname/MAC, Jaro‑Winkler thresholds by field length), and enforce an authority matrix plus manual‑review queue for low‑confidence matches.** Implement metrics (coverage ≥95%, false‑positive <2%) and tune thresholds iteratively against seeded test data.   [datareconiq.com](https://datareconiq.com/blog/data-reconciliation-playbook-2026)  [beefed.ai](https://beefed.ai/en/cmdb-reconciliation-data-quality)
+
+### Key considerations, clarifying questions, and decision points
+- **Scope:** which CI classes (laptops, servers, network gear, IoT) must be matched first?  
+- **Authoritative sources:** which system is the source of truth per attribute (serial → ITAM; MAC → network; hostname → AD/MDM)?   [beefed.ai](https://beefed.ai/en/cmdb-reconciliation-data-quality)  
+- **Operational policy:** should high‑confidence matches auto‑link, or only suggest? Decide auto‑link policy per CI class and risk level.  
+- **Metrics to track:** coverage, false‑positive rate, conflict rate, mean manual resolution time.
+
+---
+
+### Matching pipeline (recommended staged approach)
+1. **Stage 1 — Deterministic exact match**  
+   - Keys: **serialNumber**, **assetTag**, **cloud_resource_id**. Exact matches should auto‑link. This stage typically captures **40–60%** of matches in practice.   [datareconiq.com](https://datareconiq.com/blog/data-reconciliation-playbook-2026)
+
+2. **Stage 2 — High‑confidence composite match**  
+   - Combine MAC + hostname + model; require **two independent attributes** to match (e.g., MAC + hostname). If both present, auto‑link or present as “suggested high‑confidence.”   [TechDocs](https://techdocs.broadcom.com/us/en/ca-enterprise-software/business-management/ca-service-management/17-3/using/asset-management/hardware-asset-management/asset-matching-criteria.html)
+
+3. **Stage 3 — Fuzzy string matching**  
+   - Use **Jaro‑Winkler** for hostnames and model names. **Thresholds:** long fields (≥12 chars) use **0.85–0.90**; short fields use **0.92–0.97**. Tune per field length.   [datareconiq.com](https://datareconiq.com/blog/data-reconciliation-playbook-2026)
+
+4. **Stage 4 — Phonetic and semantic**  
+   - Apply Metaphone/Soundex for human names and vendor strings; use only as a secondary signal.   [datareconiq.com](https://datareconiq.com/blog/data-reconciliation-playbook-2026)
+
+5. **Stage 5 — Rules and authority**  
+   - Attribute‑level authority: accept updates only from the authoritative source for that attribute (e.g., procurement for purchaseDate). Conflicting updates should be quarantined.   [beefed.ai](https://beefed.ai/en/cmdb-reconciliation-data-quality)
+
+---
+
+### Decision table: matching techniques and thresholds
+
+| **Technique** | **When to use** | **Suggested threshold** | **Risk** |
+|---|---:|---:|---|
+| Exact serial/asset_tag | Always first | N/A | Near‑zero FP |
+| MAC + hostname composite | Agentless + agent | Require both | Low FP if MAC reliable |
+| Jaro‑Winkler (hostname/model) | Missing serial | 0.85–0.97 (by length) | Tunable FP vs FN tradeoff |
+| Phonetic (Metaphone) | Names, vendor strings | Use as secondary signal | Language bias |
+| Rule/authority | Attribute conflicts | Policy driven | Requires governance |
+
+---
+
+### Tuning methodology (practical steps)
+1. **Seed test corpus** with known assets, conflicts, and orphans (use generator/test plan). Measure baseline coverage and FP.   [assetcues.com](https://www.assetcues.com/blog/hardware-asset-inventory-reconciliation/)  
+2. **Set conservative thresholds** initially (high precision), enable suggested matches for human review.  
+3. **Run iterative A/B tuning**: lower thresholds gradually until coverage target reached while monitoring FP.  
+4. **Field‑specific thresholds**: shorter strings need higher thresholds; MAC comparisons use Hamming distance (allow 1 nibble flip for known spoofing patterns).   [datareconiq.com](https://datareconiq.com/blog/data-reconciliation-playbook-2026)  
+5. **Automate metrics**: compute coverage, FP rate, conflict rate each run; fail CI if FP ≥ 2% or coverage < target.
+
+---
+
+### Controls, governance, and risks
+- **Authority matrix** is mandatory: define per‑attribute authoritative sources and enforce them in reconciliation.   [beefed.ai](https://beefed.ai/en/cmdb-reconciliation-data-quality)  
+- **Audit trail**: every auto‑link must create an auditable entry and be reversible (safe rollback).   [beefed.ai](https://beefed.ai/en/asset-audit-playbook-cmdb-reconciliation)  
+- **Risk trade‑offs:** aggressive auto‑linking increases coverage but raises false positives and downstream operational risk; conservative policies increase manual workload. Balance via staged rollout and SLA for manual queue.
+
+---
+
+### Final recommendations (actionable)
+- **Implement the 5‑stage pipeline** above and start with conservative fuzzy thresholds. **Measure and tune weekly** against seeded tests until you meet coverage ≥95% and FP <2%.   [datareconiq.com](https://datareconiq.com/blog/data-reconciliation-playbook-2026)  [assetcues.com](https://www.assetcues.com/blog/hardware-asset-inventory-reconciliation/)  
+- **Enforce attribute authority** and immutable audit logs for every reconciliation action.   [beefed.ai](https://beefed.ai/en/cmdb-reconciliation-data-quality)
