@@ -1,0 +1,31 @@
+IT Asset Inventory and Checklist Suite — each item includes purpose, priority, owner, and acceptance criteria
+---
+
+### Core Components Checklist
+
+| **Component** | **Purpose** | **Priority** | **Owner** | **Acceptance Criteria** |
+|---|---:|---:|---:|---|
+| **1. Asset Discovery Engine** | Auto‑discover hardware, software, cloud resources (agent + agentless) | **High** | Infra/DevOps | Discovers ≥95% of known endpoints in test network; reconciles MDM/AD records.   [inventory-os.com](https://www.inventory-os.com/blog/it-asset-management-checklist)  [Siit](https://www.siit.io/blog/it-asset-inventory-step-by-step-guide) |
+| **2. Canonical Inventory Data Model** | Unified schema (serial, asset tag, owner, cost center, lifecycle state) | **High** | Product/Architect | Schema documented; all assets stored with required fields; API returns consistent JSON.   [ampthilly.com](https://ampthilly.com/blog/it-asset-inventory-checklist/)  [Process Street](https://www.process.st/templates/it-asset-management-checklist/) |
+| **3. Checklist and Template Engine** | Create onboarding/retirement checklists with conditional steps and approvals | **High** | Product/Workflow | Templates editable in UI; conditional logic and approval gates function in staging.   [Paperform](https://paperform.co/templates/it-asset-inventory-checklist/) |
+| **4. Workflow Orchestration** | Automate tasks, notifications, SLA timers, and integrations (HR, ITSM) | **High** | Backend/Integrations | Triggers from HR events create tasks; retries and audit trail present. |
+| **5. Role Based Access Control** | RBAC, separation of duties, SSO + MFA enforcement | **High** | Security | Fine‑grained roles; MFA enforced; retirement actions require dual approval. |
+| **6. Immutable Audit Trail** | Tamper‑evident logs for every checklist action and disposal certificate | **High** | Security/Compliance | Append‑only logs; exportable signed reports; hash verification.   [Process Street](https://www.process.st/templates/it-asset-management-checklist/) |
+| **7. Chain of Custody and Physical Verification** | Record physical handoffs, disposal receipts, photos, and signatures | **Medium** | Operations | Each retired asset has signed disposal record and photo evidence.   [Siit](https://www.siit.io/blog/it-asset-inventory-step-by-step-guide) |
+| **8. Data Sanitization and Certification Module** | Wipe/certify devices before redeployment or disposal | **High** | Security/Endpoint | Wipe logs, certificate generation, and verification workflow. |
+| **9. Vendor and Transaction Controls** | Vendor KYC, master‑file change approvals, escrow for proceeds | **High** | Finance/Procurement | Vendor changes require 2 approvals; KYC fields validated.   [Process Street](https://www.process.st/templates/it-asset-management-checklist/) |
+| **10. Reporting and Compliance Exports** | Audit reports, certificates of destruction, regulatory exports | **High** | Compliance | Prebuilt reports for audits; scheduled exports and PDF certificates. |
+| **11. API Layer and Integration Connectors** | REST GraphQL APIs for MDM, AD, ITSM, finance, HR | **High** | API Team | OpenAPI spec; sandbox keys; integration tests pass. |
+| **12. Anomaly Detection and Alerts** | Detect suspicious redeployments, duplicate disposals, vendor anomalies | **Medium** | Security/Analytics | Alerts for unusual reserve movements or repeated leasebacks.   [inventory-os.com](https://www.inventory-os.com/blog/it-asset-management-checklist) |
+| **13. UI Component Library and Theming** | HTML UI components, org‑level customization, accessibility | **Medium** | Frontend | Reusable components; theme overrides per tenant; WCAG AA. |
+| **14. Test Harness and CI Pipeline** | Unit, integration, security tests; automated deployments | **High** | SRE/QA | 90%+ test coverage for critical modules; pipeline gates on security tests. |
+| **15. Backup, Encryption, and Key Management** | Data at rest/in transit encryption; secure key rotation | **High** | Security | All sensitive fields encrypted; KMS rotation policy in place. |
+
+---
+
+### Keeping the Checklist Live Through Development
+- **Version the checklist** in the product backlog (e.g., `checklist:v1.0`) and update as features are implemented or risks change.  
+- **Sprint cadence updates**: add a checklist review item to each sprint retrospective until GA.  
+- **Automated verification**: tie acceptance criteria to CI tests and integration smoke tests so checklist items flip to “done” automatically when tests pass.  
+- **Quarterly risk review**: Security and Compliance owners revalidate high‑risk items (RBAC, audit trail, sanitization).  
+- **Change log and approvals**: every checklist change requires a documented owner and approval (product + security).
