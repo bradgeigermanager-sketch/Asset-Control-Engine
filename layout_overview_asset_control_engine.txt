@@ -1,0 +1,157 @@
+### Repository scaffold overview
+A complete, production‑ready repository scaffold for the **Asset Control Engine** including a Python FastAPI backend, a React + TypeScript frontend, seed data and tests, Docker compose for local development, and CI templates. The scaffold is modular so teams can replace components (Postgres, S3, Vault) with managed services. Below I provide the repository layout, key file contents and snippets, run instructions, and a prioritized checklist mapping to required components.
+
+---
+
+### Repository layout
+```
+asset-control-engine/
+├─ api/
+│  ├─ Dockerfile
+│  ├─ pyproject.toml
+│  ├─ api/
+│  │  ├─ main.py
+│  │  ├─ matcher.py
+│  │  ├─ models.py
+│  │  ├─ audit.py
+│  │  ├─ config.json
+│  │  └─ db.py
+│  └─ tests/
+│     └─ test_reconciliation.py
+├─ ui/
+│  ├─ Dockerfile
+│  ├─ package.json
+│  ├─ tsconfig.json
+│  └─ src/
+│     ├─ index.tsx
+│     ├─ App.tsx
+│     ├─ services/
+│     │  └─ api.ts
+│     └─ components/
+│        ├─ Inventory/
+│        │  └─ InventoryTable.tsx
+│        ├─ Editor/
+│        │  └─ TemplateEditor.tsx
+│        └─ Runner/
+│           └─ ChecklistRunner.tsx
+├─ data/
+│  ├─ generate_seeds.py
+│  ├─ assets_seed.csv
+│  ├─ discoveries_seed.csv
+│  └─ anomalies_seed.csv
+├─ infra/
+│  ├─ docker-compose.yml
+│  ├─ k8s/
+│  │  └─ deployment.yaml
+│  └─ ci/
+│     └─ reconciliation-ci.yml
+├─ docs/
+│  ├─ architecture.md
+│  └─ reconciliation_tuning.md
+└─ README.md
+```
+
+---
+
+### Key files and code snippets
+**api/main.py** — FastAPI entry with discovery, suggest, and reconcile endpoints
+```python
+from fastapi import FastAPI, HTTPException
+from .matcher import Matcher
+from .audit import AuditStore
+import json, uuid, datetime
+
+app = FastAPI(title="Asset Control Engine")
+with open("api/config.json") as f:
+    CONFIG = json.load(f)
+matcher = Matcher(CONFIG)
+audit = AuditStore("data/audit_store.jsonl")
+ASSETS, DISCOVERIES = {}, {}
+
+@app.post("/api/discovery")
+def post_discovery(payload: dict):
+    did = payload.get("id") or f"d-{uuid.uuid4()}"
+    payload["id"] = did
+    payload["reconciliationStatus"] = "unmatched"
+    DISCOVERIES[did] = payload
+    audit.append(actor="system", action="discovery.ingest", resourceId=did, payload=payload)
+    return {"id": did}
+```
+
+**api/matcher.py** — staged scoring engine using weights and fuzzy matching
+```python
+from rapidfuzz import fuzz
+class Matcher:
+    def __init__(self, cfg): self.cfg = cfg
+    def score_pair(self, discovery, asset):
+        # weights from config, serial exact, mac exact/hamming, hostname fuzzy
+        # returns normalized score 0..1
+        ...
+    def suggest(self, discovery, assets):
+        scored = [{"assetId": a["id"], "score": round(self.score_pair(discovery,a),4)} for a in assets]
+        return sorted(scored, key=lambda x: x["score"], reverse=True)[:5]
+```
+
+**ui/src/services/api.ts** — typed API client
+```ts
+export async function suggest(discoveryId: string) {
+  const r = await fetch(`${API_BASE}/api/reconciliation/suggest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ discoveryId })
+  });
+  return r.json();
+}
+```
+
+**data/generate_seeds.py** — deterministic seed generator producing CSVs used by tests and imports.  
+**infra/docker-compose.yml** — local stack with `api`, `ui`, `postgres`, and `minio` services.  
+**infra/ci/reconciliation-ci.yml** — GitHub Actions job to generate seeds, import to staging DB, run pytest, and fail on thresholds.
+
+---
+
+### Setup and run commands
+**Local quickstart**
+- **Build and run**: `docker-compose -f infra/docker-compose.yml up --build`
+- **API**: `http://localhost:8000` OpenAPI at `/docs`
+- **UI**: `http://localhost:3000`
+- **Generate seeds**: `python data/generate_seeds.py`
+- **Run tests**: `pytest -q api/tests/test_reconciliation.py`
+
+**Notes**
+- Replace in‑memory stores with Postgres by running `scripts/import_csv.py` to load `assets_seed.csv`.  
+- Configure secrets and OAuth in environment variables or Vault before enabling high‑risk endpoints.  
+- Use `docker-compose.override.yml` to mount local code for iterative development.
+
+---
+
+### Required components checklist
+| **Component** | **Owner** | **Priority** | **Acceptance Criteria** |
+|---|---:|---:|---|
+| **Asset Discovery Engine** | Infra/DevOps | High | Discovers ≥95% seeded endpoints; connectors for AD/MDM/cloud present |
+| **Canonical Inventory Data Model** | Product/Architect | High | Schema implemented; API returns consistent JSON; sample import succeeds |
+| **Checklist and Template Engine** | Product/Workflow | High | Template editor publishes versions; checklist instances record evidence |
+| **Workflow Orchestration** | Backend/Integrations | High | HR trigger → checklist → AD disable simulated end‑to‑end |
+| **Role Based Access Control** | Security | High | SSO + MFA enforced; separation of duties validated in tests |
+| **Immutable Audit Trail** | Security/Compliance | High | Append‑only logs; tamper verification test passes |
+| **Chain of Custody and Physical Verification** | Operations | Medium | Mobile capture produces signed custody PDF |
+| **Data Sanitization Module** | Security/Endpoint | High | Wipe logs and signed certificates generated and verified |
+| **Vendor and Transaction Controls** | Finance/Procurement | High | Vendor KYC flow and two‑step vendor change enforced |
+| **Reporting and Compliance Exports** | Compliance | High | Prebuilt reports export signed PDFs and CSVs |
+| **API Layer and Integration Connectors** | API Team | High | OpenAPI spec present; connector tests pass |
+| **Anomaly Detection and Alerts** | Security/Analytics | Medium | Alerts for repeated leasebacks and reserve anomalies |
+
+---
+
+### Implementation milestones and checklist workflow
+- **Sprint 0**: repo scaffold, Docker compose, seed generator, OpenAPI contract.  
+- **Sprint 1**: implement discovery connectors (AD/MDM), canonical schema, import seeds, basic UI table.  
+- **Sprint 2**: matcher core, suggest endpoint, reconciliation apply, audit anchoring.  
+- **Sprint 3**: checklist editor, runner UI, evidence upload, approval flows with MFA.  
+- **Sprint 4**: workflow orchestrator connectors, sanitization integration, chain‑of‑custody mobile flows.  
+- **Sprint 5**: anomaly detection, reporting exports, compliance sign‑offs, production hardening.
+
+**Checklist governance**
+- Each checklist item maps to a GitHub issue with owner and acceptance tests.  
+- CI gates: unit tests, contract tests, SAST, and reconciliation acceptance thresholds.  
+- Security owner signs off before enabling auto‑link or create actions in production.
