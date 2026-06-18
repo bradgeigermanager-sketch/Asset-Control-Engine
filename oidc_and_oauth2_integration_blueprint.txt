@@ -1,0 +1,237 @@
+### OIDC and OAuth2 Integration Blueprint
+
+Below is a **practical, production‑ready blueprint** to integrate OIDC/OAuth2, enforce MFA for high‑risk actions, and implement RBAC/attribute authority for the Asset Control Engine. It includes **architecture**, **configuration**, **FastAPI middleware examples**, **policy enforcement (OPA/Rego)**, **MFA handling**, **testing checklist**, and **deployment notes**. I inspected the repository scaffold you have (FastAPI backend, matcher, audit store) for context.   [github.com](https://github.com/bradgeigermanager-sketch/Asset-Control-Engine/tree/main/scripts)
+
+---
+
+### 1 Architecture and flow
+
+**Goal**  
+Authenticate users and services via OIDC/OAuth2, authorize actions via scopes and RBAC, require MFA for sensitive endpoints, and log every decision to the immutable audit trail.
+
+**Components**
+- **Identity Provider (IdP)**: OIDC provider (Azure AD, Okta, Keycloak) issuing JWT access tokens and ID tokens.
+- **API Gateway / Auth Middleware**: Validates tokens, enforces scopes, extracts claims, and enforces MFA header for high‑risk endpoints.
+- **Policy Engine**: OPA (Open Policy Agent) for separation of duties and attribute authority rules.
+- **Audit Service**: Append‑only audit store records actor, action, and evidence of MFA/approval.
+- **UI**: Redirects to IdP for login; collects and forwards MFA evidence token when required.
+
+**High‑level flow**
+1. User authenticates at IdP (OIDC Authorization Code flow).  
+2. UI receives ID token and access token; stores tokens in secure session.  
+3. For normal API calls, UI sends `Authorization: Bearer <access_token>`.  
+4. For high‑risk actions, UI obtains an **MFA assertion** (IdP one‑time token or step‑up token) and sends `X-MFA-Token: <mfa_token>` header.  
+5. API middleware validates access token, verifies `X-MFA-Token` with IdP or introspection endpoint, then calls OPA to evaluate policy.  
+6. If allowed, action proceeds and audit entry is appended (including MFA evidence hash).
+
+---
+
+### 2 Configuration and IdP setup
+
+**IdP requirements**
+- Support OIDC Authorization Code flow with PKCE for SPAs.
+- Support token introspection or an endpoint to validate short‑lived MFA assertions.
+- Ability to issue tokens with custom claims: `roles`, `groups`, `acr` (authentication context class), and `amr` (authentication methods reference).
+
+**Recommended scopes and claims**
+- **Scopes**: `assets:read`, `assets:write`, `discovery:run`, `discovery:manage`, `checklists:run`, `audit:read`, `admin:all`.
+- **Claims**:
+  - `sub` (subject / user id)
+  - `email`
+  - `name`
+  - `roles` (array)
+  - `acr` or `amr` indicating MFA level (e.g., `pwd`, `otp`, `webauthn`)
+  - `exp`, `iat`, `iss`, `aud`
+
+**Client registration**
+- Register two clients:
+  - **UI client** (public SPA): Authorization Code + PKCE, short access token lifetime.
+  - **Backend client** (machine-to-machine): Client Credentials for connectors and services.
+
+**MFA configuration**
+- Configure step‑up authentication in IdP: when requested, IdP issues a short‑lived **MFA assertion** (signed JWT or one‑time token) with claim `acr: "urn:mfa:required"` and short TTL (e.g., 5 minutes).
+
+---
+
+### 3 FastAPI middleware and token validation
+
+**Principles**
+- Validate JWT signature and claims (issuer, audience, expiry).
+- Enforce required scopes per endpoint.
+- Validate `X-MFA-Token` for endpoints flagged as high‑risk.
+- Extract user identity and roles and attach to request context.
+
+**Example: token validation and MFA enforcement (Python, FastAPI)**
+
+```python
+# api/auth.py
+from fastapi import Request, HTTPException
+from jose import jwt, JWTError
+import requests
+import time
+
+OIDC_CONFIG = {
+  "issuer": "https://idp.example.com",
+  "jwks_uri": "https://idp.example.com/.well-known/jwks.json",
+  "audience": "asset-control-api"
+}
+
+JWKS = requests.get(OIDC_CONFIG["jwks_uri"]).json()
+
+def verify_jwt(token: str):
+    try:
+        # Use jose or PyJWT with JWKS verification
+        payload = jwt.decode(token, JWKS, algorithms=["RS256"], audience=OIDC_CONFIG["audience"])
+        return payload
+    except JWTError as e:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+def require_scope(payload, scope):
+    scopes = payload.get("scope", "") or " ".join(payload.get("scp", []))
+    if scope not in scopes.split():
+        raise HTTPException(status_code=403, detail="Insufficient scope")
+
+def validate_mfa(mfa_token: str, user_sub: str):
+    # Option A: introspect MFA token at IdP
+    resp = requests.post("https://idp.example.com/oauth2/introspect", data={"token": mfa_token})
+    if resp.status_code != 200 or not resp.json().get("active"):
+        raise HTTPException(status_code=403, detail="Invalid MFA token")
+    # Ensure MFA token subject matches user
+    if resp.json().get("sub") != user_sub:
+        raise HTTPException(status_code=403, detail="MFA token mismatch")
+```
+
+**Dependency usage in endpoints**
+
+```python
+from fastapi import Depends
+
+def auth_dependency(request: Request):
+    auth = request.headers.get("Authorization")
+    if not auth or not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401)
+    token = auth.split()[1]
+    payload = verify_jwt(token)
+    request.state.user = payload
+    return payload
+
+@app.post("/api/discovery/reconcile")
+def reconcile(..., payload=Depends(auth_dependency)):
+    # enforce scope
+    require_scope(payload, "discovery:manage")
+    # if endpoint is high-risk, require MFA header
+    if endpoint_is_high_risk():
+        mfa_token = request.headers.get("X-MFA-Token")
+        if not mfa_token:
+            raise HTTPException(status_code=403, detail="MFA required")
+        validate_mfa(mfa_token, payload["sub"])
+    # call OPA for policy decision
+```
+
+**Notes**
+- Use JWKS caching and rotation handling.
+- Validate `exp` and `nbf` claims.
+- For introspection, prefer mutual TLS between API and IdP.
+
+---
+
+### 4 Policy enforcement with OPA (Rego)
+
+**Purpose**
+Centralize separation of duties, attribute authority, and approval rules. OPA evaluates requests using input containing user claims, requested action, resource, and MFA evidence.
+
+**Example Rego policy**
+
+```rego
+# opa/policies/reconciliation.rego
+package asset.reconcile
+
+default allow = false
+
+# deny if user lacks required scope
+has_scope(sc) {
+  sc == input.token.scopes[_]
+}
+
+# separation of duties: cannot approve own asset
+deny_approve_if_owner {
+  input.action == "approve_redeploy"
+  input.resource.owner_id == input.token.sub
+}
+
+# require MFA for create from discovery
+require_mfa {
+  input.action == "create_asset_from_discovery"
+  input.token.acr != "urn:mfa:required"
+}
+
+allow {
+  has_scope("discovery:manage")
+  not deny_approve_if_owner
+  not require_mfa
+}
+```
+
+**Integration**
+- API sends OPA input:
+```json
+{
+  "token": { "sub":"user-123", "roles":["Identity-Admin"], "scopes":["discovery:manage"], "acr":"pwd" },
+  "action": "create_asset_from_discovery",
+  "resource": { "assetId": "a-123", "owner_id": "u-456" },
+  "mfa": { "present": true, "verified": true }
+}
+```
+- OPA returns `allow: true/false` and optional `explain` details for UI.
+
+---
+
+### 5 MFA handling and evidence capture
+
+**MFA approaches**
+- **IdP step‑up assertion**: preferred. UI requests step‑up from IdP; IdP returns short‑lived MFA JWT. API validates via introspection or signature.
+- **One‑time code exchange**: UI collects OTP and exchanges with IdP for an assertion.
+- **WebAuthn**: for strong device‑bound MFA; IdP returns `amr` claim.
+
+**Evidence recording**
+- On successful MFA validation, API appends audit entry with:
+  - `actorId`, `actionType`, `resourceId`
+  - `mfaEvidenceHash`: SHA‑256 of MFA assertion (do not store raw token)
+  - `mfaMethod`: `otp|webauthn|u2f`
+  - `timestamp`
+
+**UI UX**
+- For high‑risk actions, show a modal: “Step‑up authentication required.” Trigger IdP step‑up flow and attach returned MFA assertion to the API call as `X-MFA-Token`.
+
+---
+
+### 6 Testing, rollout, and operational checklist
+
+**Testing checklist**
+- [ ] Validate JWT signature verification with IdP JWKS rotation.
+- [ ] Verify scope enforcement for each endpoint.
+- [ ] Test MFA step‑up flow end‑to‑end (UI → IdP → API introspection).
+- [ ] Test OPA policies: separation of duties, attribute authority, deny/allow cases.
+- [ ] Simulate expired tokens, revoked tokens, and token replay attempts.
+- [ ] Confirm audit entries include MFA evidence hash and are append‑only.
+- [ ] Load test token validation and OPA calls for latency impact.
+
+**Rollout plan**
+1. **Staging**: enable token validation and scope checks; keep `autoLink` disabled.  
+2. **Canary**: enable MFA enforcement for a subset of users/roles.  
+3. **Production**: enable full policy enforcement and require MFA for configured actions.
+
+**Monitoring and alerts**
+- Monitor token validation errors, OPA denials, MFA failures, and audit anchoring failures.
+- Alert on spikes in `401/403` or on OPA policy evaluation latency.
+
+---
+
+### Security and operational notes
+
+- **Never log raw tokens**. Log only token identifiers or hashes.  
+- **Short token lifetimes** for access tokens; use refresh tokens with secure storage for server clients.  
+- **Mutual TLS** for introspection and connector calls.  
+- **Key rotation**: support JWKS rotation and IdP key rollover.  
+- **Rate limiting**: protect introspection and OPA endpoints from abuse.  
+- **Fail‑safe**: if IdP introspection is unavailable, fail closed for high‑risk actions and fail open for low‑risk read operations only if policy allows.
