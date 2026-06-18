@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "asset-control-engine-api"
+version = "0.1.0"
+description = "Asset Control Engine API prototype"
+authors = ["Your Team <you@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+fastapi = "^0.95.0"
+uvicorn = "^0.22.0"
+pydantic = "^1.10.0"
+rapidfuzz = "^2.13.7"
+requests = "^2.31.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
