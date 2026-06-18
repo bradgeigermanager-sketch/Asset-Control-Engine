@@ -1,0 +1,592 @@
+### OpenAPI Contract Overview
+
+Below is a complete **OpenAPI 3.1** YAML contract focused on the **Discovery** and **Assets** surface you requested (component A). It includes security schemes, core schemas, discovery endpoints, reconciliation operations, and pagination. Use this as the canonical API contract to generate server stubs, client SDKs, and contract tests.
+
+```yaml
+openapi: 3.1.0
+info:
+  title: Asset Control Engine API
+  version: "0.1.0"
+  description: |
+    Core APIs for asset discovery, canonical inventory, reconciliation, and related operations.
+    Designed for secure integrations with AD, MDM, cloud providers, and endpoint agents.
+
+servers:
+  - url: https://api.example.com
+    description: Production
+  - url: https://staging.api.example.com
+    description: Staging
+
+components:
+  securitySchemes:
+    oauth2:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.example.com/oauth2/token
+          scopes:
+            assets:read: Read assets and discovery records
+            assets:write: Create and update assets
+            discovery:run: Trigger discovery scans
+            discovery:manage: Manage connectors and reconciliation
+            checklists:run: Instantiate and run checklists
+            audit:read: Read audit logs
+            admin:all: Administrative actions
+    mfa:
+      type: apiKey
+      in: header
+      name: X-MFA-Token
+      description: One-time MFA token required for high-risk approvals
+
+  schemas:
+    Pagination:
+      type: object
+      properties:
+        total:
+          type: integer
+        page:
+          type: integer
+        perPage:
+          type: integer
+
+    UserRef:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+
+    Asset:
+      type: object
+      required:
+        - id
+        - assetTag
+        - lifecycleState
+      properties:
+        id:
+          type: string
+          format: uuid
+        assetTag:
+          type: string
+        serialNumber:
+          type: string
+        type:
+          type: string
+          description: Asset category e.g., laptop, server, switch, vm
+        model:
+          type: string
+        manufacturer:
+          type: string
+        hostname:
+          type: string
+        macAddresses:
+          type: array
+          items:
+            type: string
+        ipAddresses:
+          type: array
+          items:
+            type: string
+        os:
+          type: object
+          properties:
+            name:
+              type: string
+            version:
+              type: string
+        owner:
+          $ref: '#/components/schemas/UserRef'
+        location:
+          type: string
+        costCenter:
+          type: string
+        purchaseDate:
+          type: string
+          format: date
+        warrantyEnd:
+          type: string
+          format: date
+        lifecycleState:
+          type: string
+          enum: [active, quarantine, retired, disposed]
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    DiscoveryRecord:
+      type: object
+      required:
+        - id
+        - discoverySource
+        - rawPayload
+      properties:
+        id:
+          type: string
+          format: uuid
+        discoverySource:
+          type: string
+          enum: [agent, ad, mdm, cloud, network, manual]
+        rawPayload:
+          type: object
+        serialNumber:
+          type: string
+        hostname:
+          type: string
+        macAddresses:
+          type: array
+          items:
+            type: string
+        ipAddresses:
+          type: array
+          items:
+            type: string
+        os:
+          type: object
+          properties:
+            name:
+              type: string
+            version:
+              type: string
+        lastSeen:
+          type: string
+          format: date-time
+        reconciliationStatus:
+          type: string
+          enum: [unmatched, matched, conflict]
+        suggestedMatches:
+          type: array
+          items:
+            type: object
+            properties:
+              assetId:
+                type: string
+              score:
+                type: number
+                format: float
+
+    ReconcileRequest:
+      type: object
+      properties:
+        discoveryId:
+          type: string
+        assetId:
+          type: string
+        action:
+          type: string
+          enum: [link, create, ignore, merge]
+        mergeStrategy:
+          type: string
+          enum: [preferDiscovery, preferAsset, manual]
+
+    ReconcileResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        assetId:
+          type: string
+        message:
+          type: string
+
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+
+security:
+  - oauth2: [assets:read]
+
+paths:
+  /api/assets:
+    get:
+      summary: List assets
+      description: Returns a paginated list of canonical assets. Supports filtering and sorting.
+      security:
+        - oauth2: [assets:read]
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: Free text search across assetTag, serialNumber, hostname
+        - name: lifecycleState
+          in: query
+          schema:
+            type: string
+            enum: [active, quarantine, retired, disposed]
+        - name: ownerId
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: perPage
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Asset list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Asset'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    post:
+      summary: Create asset
+      description: Create a new canonical asset record. Use for manual imports or reconciliation creates.
+      security:
+        - oauth2: [assets:write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Asset'
+      responses:
+        '201':
+          description: Asset created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/assets/{id}:
+    get:
+      summary: Get asset by id
+      security:
+        - oauth2: [assets:read]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Asset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    patch:
+      summary: Update asset
+      description: Partial update. All updates must include audit metadata in headers or body.
+      security:
+        - oauth2: [assets:write]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Updated asset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Asset'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/assets/{id}/history:
+    get:
+      summary: Asset history
+      description: Returns chronological events for the asset including discovery links, checklist events, custody records.
+      security:
+        - oauth2: [assets:read]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Asset history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    timestamp:
+                      type: string
+                      format: date-time
+                    actorId:
+                      type: string
+                    eventType:
+                      type: string
+                    details:
+                      type: object
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/discovery/scan:
+    post:
+      summary: Trigger discovery scan
+      description: Start a discovery scan for a given scope or connector. Returns an accepted job id.
+      security:
+        - oauth2: [discovery:run]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope:
+                  type: string
+                  description: Scope identifier or CIDR for network scans
+                connector:
+                  type: string
+                  description: Connector id (ad, mdm, aws, azure, gcp, network)
+                options:
+                  type: object
+                  additionalProperties: true
+      responses:
+        '202':
+          description: Scan accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId:
+                    type: string
+                  status:
+                    type: string
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/discovery/unmatched:
+    get:
+      summary: List unmatched discovery records
+      security:
+        - oauth2: [assets:read]
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: perPage
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Unmatched discovery records
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DiscoveryRecord'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
+
+  /api/discovery/{id}:
+    get:
+      summary: Get discovery record
+      security:
+        - oauth2: [assets:read]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Discovery record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscoveryRecord'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/discovery/reconcile:
+    post:
+      summary: Reconcile discovery record to canonical asset
+      description: Link a discovery record to an existing asset, create a new asset from discovery, or mark as ignored.
+      security:
+        - oauth2: [discovery:manage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReconcileRequest'
+      responses:
+        '200':
+          description: Reconciliation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconcileResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden (policy violation)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/reconciliation/suggestions:
+    post:
+      summary: Suggest matches for a discovery record
+      security:
+        - oauth2: [discovery:run]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                discoveryId:
+                  type: string
+      responses:
+        '200':
+          description: Suggested matches with scores
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    assetId:
+                      type: string
+                    score:
+                      type: number
+                      format: float
+
+  /api/health:
+    get:
+      summary: Service health
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  version:
+                    type: string
+
+  /api/openapi:
+    get:
+      summary: Retrieve full OpenAPI contract
+      responses:
+        '200':
+          description: OpenAPI YAML
+          content:
+            application/yaml:
+              schema:
+                type: string
+
+tags:
+  - name: assets
+    description: Canonical asset operations
+  - name: discovery
+    description: Discovery and reconciliation operations
+  - name: admin
+    description: Administrative and connector management
+
+externalDocs:
+  description: Implementation notes and connector guides
+  url: https://docs.example.com/asset-control-engine
+```
+
+---
+
+### Implementation notes and recommended extensions
+
+- **MFA scope**: require the `mfa` header for endpoints that perform high‑risk actions (reconcile with create, approve redeploy, vendor changes). Enforce server‑side checks that the MFA token is valid and tied to the approver identity.
+- **Audit metadata**: require an `X-Audit-Actor` header or include `actorId` in request bodies for all write operations; every write must be appended to the immutable audit trail with a payload hash.
+- **Rate limits and quotas**: add per‑client rate limiting on discovery scan triggers and reconciliation endpoints to prevent abuse.
+- **Connector management**: extend the contract with `/api/connectors` to manage connector credentials, rotation, and test runs; store credentials in a secrets manager and never return raw secrets via API.
+- **Pagination and filtering**: implement server‑side pagination and indexed filters for `q`, `serialNumber`, and `assetTag` to meet the performance acceptance criteria.
+- **Schema evolution**: use `metadata` JSONB for vendor‑specific fields while keeping canonical keys (serialNumber, assetTag, macAddresses) immutable for reconciliation.
